@@ -345,7 +345,12 @@ static void main_thread_fct(void *arg)
   SystemClock_Config();
   vPortSetupTimerInterrupt();
 
+  printf ("CONSOLE_Config  before \r\n");
+
   CONSOLE_Config();
+
+  printf ("CONSOLE_Config  after \r\n");
+
 
   NPURam_enable();
   Fuse_Programming();

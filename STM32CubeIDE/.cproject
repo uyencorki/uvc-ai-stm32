@@ -35,7 +35,6 @@
                   <listOptionValue builtIn="false" value="USE_FULL_ASSERT"/>
                   <listOptionValue builtIn="false" value="USE_FULL_LL_DRIVER"/>
                   <listOptionValue builtIn="false" value="VECT_TAB_SRAM"/>
-                  <listOptionValue builtIn="false" value="USE_IMX335_SENSOR"/>
                   <listOptionValue builtIn="false" value="USE_VD66GY_SENSOR"/>
                   <listOptionValue builtIn="false" value="USE_VD55G1_SENSOR"/>
                   <listOptionValue builtIn="false" value="USE_VD1943_SENSOR"/>
@@ -73,7 +72,6 @@
                   <listOptionValue builtIn="false" value="../../Lib/ai-postprocessing-wrapper"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors"/>
-                  <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/imx335"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/vd55g1"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/vd6g"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/vd1943"/>
@@ -104,7 +102,6 @@
                   <listOptionValue builtIn="false" value="USE_FULL_ASSERT"/>
                   <listOptionValue builtIn="false" value="USE_FULL_LL_DRIVER"/>
                   <listOptionValue builtIn="false" value="VECT_TAB_SRAM"/>
-                  <listOptionValue builtIn="false" value="USE_IMX335_SENSOR"/>
                   <listOptionValue builtIn="false" value="USE_VD66GY_SENSOR"/>
                   <listOptionValue builtIn="false" value="USE_VD55G1_SENSOR"/>
                   <listOptionValue builtIn="false" value="USE_VD1943_SENSOR"/>
@@ -142,7 +139,6 @@
                   <listOptionValue builtIn="false" value="../../Lib/ai-postprocessing-wrapper"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors"/>
-                  <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/imx335"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/vd55g1"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/vd6g"/>
                   <listOptionValue builtIn="false" value="../../Lib/Camera_Middleware/sensors/vd1943"/>

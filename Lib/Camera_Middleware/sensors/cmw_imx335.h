@@ -22,6 +22,8 @@
  extern "C" {
 #endif
 
+#ifdef USE_IMX335_SENSOR
+
 #include <stdint.h>
 #include "cmw_sensors_if.h"
 #include "cmw_errno.h"
@@ -50,6 +52,8 @@ typedef struct
 
 int CMW_IMX335_Probe(CMW_IMX335_t *io_ctx, CMW_Sensor_if_t *vd55g1_if);
 void CMW_IMX335_SetDefaultSensorValues(CMW_IMX335_config_t *imx335_config);
+
+#endif /* USE_IMX335_SENSOR */
 
 #ifdef __cplusplus
 }

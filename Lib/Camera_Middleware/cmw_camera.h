@@ -57,20 +57,20 @@ extern "C" {
 
 typedef enum {
   CMW_UNKNOWN_Sensor = 0x0,
-  CMW_IMX335_Sensor
+  CMW_DVP_Sensor
 } CMW_Sensor_Name_t;
 
 typedef struct
 {
   uint32_t pixel_format; /*!< This parameter can be a value from @ref CMW_PIXEL_FORMAT */
-} CMW_IMX335_config_t;
+} CMW_DVP_config_t;
 
 
 typedef struct
 {
   CMW_Sensor_Name_t selected_sensor;
   union {
-    CMW_IMX335_config_t imx335_config;
+    CMW_DVP_config_t dvp_config;
   } config_sensor;
 } CMW_Advanced_Config_t;
 

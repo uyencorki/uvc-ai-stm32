@@ -30,7 +30,7 @@ static int sensor_mirror_flip = CMW_MIRRORFLIP_NONE;
 
 static const char *sensor_names[] = {
   "CMW_UNKNOWN",
-  "CMW_IMX335",
+  "CMW_DVP",
 };
 
 static void CAM_setSensorInfo(CMW_Sensor_Name_t sensor)
@@ -38,12 +38,12 @@ static void CAM_setSensorInfo(CMW_Sensor_Name_t sensor)
   int sensor_name_idx = 0;
 
   switch (sensor) {
-  case CMW_IMX335_Sensor:
-    sensor_width = SENSOR_IMX335_WIDTH;
-    sensor_height = SENSOR_IMX335_HEIGHT;
-    sensor_mirror_flip = SENSOR_IMX335_FLIP;
-    venc_width = VENC_IMX335_WIDTH;
-    venc_height = VENC_IMX335_HEIGHT;
+  case CMW_DVP_Sensor:
+    sensor_width = SENSOR_DVP_WIDTH;
+    sensor_height = SENSOR_DVP_HEIGHT;
+    sensor_mirror_flip = SENSOR_DVP_FLIP;
+    venc_width = VENC_DVP_WIDTH;
+    venc_height = VENC_DVP_HEIGHT;
     sensor_name_idx = 1;
     break;
   default:

@@ -21,6 +21,9 @@
 #include <stddef.h>
 #include <string.h>
 #include "cmw_imx335.h"
+
+#ifdef USE_IMX335_SENSOR
+
 #include "cmw_camera.h"
 #include "imx335_reg.h"
 #include "imx335.h"
@@ -375,3 +378,5 @@ int CMW_IMX335_Probe(CMW_IMX335_t *io_ctx, CMW_Sensor_if_t *imx335_if)
   imx335_if->SetTestPattern = CMW_IMX335_SetTestPattern;
   return ret;
 }
+
+#endif /* USE_IMX335_SENSOR */
