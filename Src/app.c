@@ -64,6 +64,42 @@
 
 #define CAPTURE_BUFFER_NB (CAPTURE_DELAY + 2)
 
+void BOARD_Pins_Init_DCMIPP(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPION_CLK_ENABLE();
+
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+
+  /* PB6/PB7/PB8/PB9 => D6/D7/VSYNC/D3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
+  GPIO_InitStruct.Alternate = GPIO_AF9_DCMIPP;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* PC6 => D1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* PD0/PD5/PD7 => HSYNC/PIXCLK/D0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_5 | GPIO_PIN_7;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /* PE0/PE8 => D2/D4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_8;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+  /* PN9 => D5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  HAL_GPIO_Init(GPION, &GPIO_InitStruct);
+}
+
 /* venc conf */
 #define VENC_MAX_WIDTH 1280
 #define VENC_MAX_HEIGHT 720

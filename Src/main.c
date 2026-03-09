@@ -69,6 +69,8 @@ int main(void)
 
   HAL_Init();
 
+  BOARD_Pins_Init_DCMIPP();
+
   Setup_Mpu();
 
   SCB_EnableICache();

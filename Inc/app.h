@@ -33,5 +33,6 @@
 #define NN_BPP 3
 
 void app_run(void);
+void BOARD_Pins_Init_DCMIPP(void);
 
 #endif
