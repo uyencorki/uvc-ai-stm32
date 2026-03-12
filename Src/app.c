@@ -90,19 +90,29 @@ void BOARD_Pins_Init_DCMIPP(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPION_CLK_ENABLE();
 
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
 
-  /* PB5/PB6/PB7/PB8/PB9 => D6/D5/D7/VSYNC/D3 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
+  /* PB6/PB7/PB8/PB9 => D6/D7/VSYNC/D3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
   GPIO_InitStruct.Alternate = GPIO_AF9_DCMIPP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /* PC6/PC7/PC9/PC10 => D1/D8/D2/D4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_9 | GPIO_PIN_10;
+  /* PC6 => D1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* PE0/PE8 => D2/D4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_8;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+  /* PN9 => D5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  HAL_GPIO_Init(GPION, &GPIO_InitStruct);
 
   /* PD0/PD5/PD7 => HSYNC/PIXCLK/D0 */
   GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_5 | GPIO_PIN_7;
@@ -117,15 +127,14 @@ void BOARD_Pins_Init_DCMIPP(void)
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, GPIO_PIN_SET);
 
-  iomux_ok &= BOARD_PinIsAf(GPIOB, 5U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOB, 6U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOB, 7U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOB, 8U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOB, 9U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOC, 6U, GPIO_AF9_DCMIPP);
-  iomux_ok &= BOARD_PinIsAf(GPIOC, 7U, GPIO_AF9_DCMIPP);
-  iomux_ok &= BOARD_PinIsAf(GPIOC, 9U, GPIO_AF9_DCMIPP);
-  iomux_ok &= BOARD_PinIsAf(GPIOC, 10U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOE, 0U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOE, 8U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPION, 9U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOD, 0U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOD, 5U, GPIO_AF9_DCMIPP);
   iomux_ok &= BOARD_PinIsAf(GPIOD, 7U, GPIO_AF9_DCMIPP);
@@ -141,7 +150,7 @@ void BOARD_Pins_Init_DCMIPP(void)
     assert(0);
   }
 
-  printf("[IOMUX] DVP: PB5 PB6 PB7 PB8 PB9, PC6 PC7 PC9 PC10, PD7 PD5 PD0\r\n");
+  printf("[IOMUX] DVP: PD7(D0) PC6(D1) PE0(D2) PB9(D3) PE8(D4) PN9(D5) PB6(D6) PB7(D7) PD5(PIXCLK) PD0(HSYNC) PB8(VSYNC)\r\n");
   printf("[IOMUX] CTRL: PC8(RESET_N), I2C1(PH9/PC1) owned by BSP\r\n");
 }
 

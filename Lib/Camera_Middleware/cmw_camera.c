@@ -21,6 +21,7 @@
 #include "cmw_camera.h"
 
 #include "isp_api.h"
+#include "app_config.h"
 #include "stm32n6xx_hal_dcmipp.h"
 #include "stm32n6xx_hal.h"
 #include "cmw_utils.h"
@@ -40,13 +41,25 @@
 #define CMW_CAMERA_DVP_FORMAT DCMIPP_FORMAT_YUV422
 #endif
 #ifndef CMW_CAMERA_DVP_VSPOLARITY
+#if APP_DVP_VSYNC_ACTIVE_HIGH
+#define CMW_CAMERA_DVP_VSPOLARITY DCMIPP_VSPOLARITY_HIGH
+#else
 #define CMW_CAMERA_DVP_VSPOLARITY DCMIPP_VSPOLARITY_LOW
 #endif
+#endif
 #ifndef CMW_CAMERA_DVP_HSPOLARITY
+#if APP_DVP_HSYNC_ACTIVE_HIGH
+#define CMW_CAMERA_DVP_HSPOLARITY DCMIPP_HSPOLARITY_HIGH
+#else
 #define CMW_CAMERA_DVP_HSPOLARITY DCMIPP_HSPOLARITY_LOW
 #endif
+#endif
 #ifndef CMW_CAMERA_DVP_PCKPOLARITY
+#if APP_DVP_PIXCLK_RISING_EDGE
 #define CMW_CAMERA_DVP_PCKPOLARITY DCMIPP_PCKPOLARITY_RISING
+#else
+#define CMW_CAMERA_DVP_PCKPOLARITY DCMIPP_PCKPOLARITY_FALLING
+#endif
 #endif
 #ifndef CMW_CAMERA_DVP_INTERFACE
 #define CMW_CAMERA_DVP_INTERFACE DCMIPP_INTERFACE_8BITS
@@ -1035,6 +1048,10 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
   /* DVP path: configure parallel receiver instead of CSI host/VC. */
 #if CMW_CAMERA_USE_DVP
   DCMIPP_ParallelConfTypeDef parallel_conf = { 0 };
+  const uint32_t test_case_idx =
+      ((APP_DVP_VSYNC_ACTIVE_HIGH ? 1U : 0U) << 2) |
+      ((APP_DVP_HSYNC_ACTIVE_HIGH ? 1U : 0U) << 1) |
+      (APP_DVP_PIXCLK_RISING_EDGE ? 1U : 0U);
 
   parallel_conf.Format = CMW_CAMERA_DVP_FORMAT;
   parallel_conf.VSPolarity = CMW_CAMERA_DVP_VSPOLARITY;
@@ -1044,6 +1061,12 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
   parallel_conf.SynchroMode = DCMIPP_SYNCHRO_HARDWARE;
   parallel_conf.SwapBits = DCMIPP_SWAPBITS_DISABLE;
   parallel_conf.SwapCycles = DCMIPP_SWAPCYCLES_DISABLE;
+
+    printf("[CMW][DVP-TEST] case=%lu VSYNC=%s HSYNC=%s PIXCLK=%s-edge\r\n",
+      (unsigned long)(test_case_idx + 1U),
+      APP_DVP_VSYNC_ACTIVE_HIGH ? "active-high" : "active-low",
+      APP_DVP_HSYNC_ACTIVE_HIGH ? "active-high" : "active-low",
+      APP_DVP_PIXCLK_RISING_EDGE ? "rising" : "falling");
 
   ret = HAL_DCMIPP_PARALLEL_SetConfig(&hcamera_dcmipp, &parallel_conf);
   if (ret != HAL_OK)
