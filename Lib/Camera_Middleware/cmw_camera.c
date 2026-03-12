@@ -27,6 +27,7 @@
 #include "cmw_io.h"
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include "assert.h"
 
 /* Switch capture interface to DVP without removing existing CSI flow. */
@@ -36,7 +37,7 @@
 
 /* Default DVP input settings; adjust once sensor timing/polarity is known. */
 #ifndef CMW_CAMERA_DVP_FORMAT
-#define CMW_CAMERA_DVP_FORMAT DCMIPP_FORMAT_RAW10
+#define CMW_CAMERA_DVP_FORMAT DCMIPP_FORMAT_YUV422
 #endif
 #ifndef CMW_CAMERA_DVP_VSPOLARITY
 #define CMW_CAMERA_DVP_VSPOLARITY DCMIPP_VSPOLARITY_LOW
@@ -48,7 +49,7 @@
 #define CMW_CAMERA_DVP_PCKPOLARITY DCMIPP_PCKPOLARITY_RISING
 #endif
 #ifndef CMW_CAMERA_DVP_INTERFACE
-#define CMW_CAMERA_DVP_INTERFACE DCMIPP_INTERFACE_10BITS
+#define CMW_CAMERA_DVP_INTERFACE DCMIPP_INTERFACE_8BITS
 #endif
 
 typedef struct
@@ -332,6 +333,11 @@ int32_t CMW_CAMERA_Start(uint32_t pipe, uint8_t *pbuff, uint32_t mode)
 {
   int32_t ret = CMW_ERROR_NONE;
 
+  printf("[CMW] start pipe=%lu mode=%lu buf=0x%08lX\r\n",
+         (unsigned long)pipe,
+         (unsigned long)mode,
+         (unsigned long)pbuff);
+
   if (pipe >= DCMIPP_NUM_OF_PIPES)
   {
     return CMW_ERROR_WRONG_PARAM;
@@ -346,6 +352,7 @@ int32_t CMW_CAMERA_Start(uint32_t pipe, uint8_t *pbuff, uint32_t mode)
 #endif
   if (ret != HAL_OK)
   {
+    printf("[CMW] start pipe=%lu HAL error=%ld\r\n", (unsigned long)pipe, (long)ret);
     return CMW_ERROR_PERIPH_FAILURE;
   }
 
@@ -356,6 +363,7 @@ int32_t CMW_CAMERA_Start(uint32_t pipe, uint8_t *pbuff, uint32_t mode)
       ret = Camera_Drv.Start(&camera_bsp);
       if (ret != CMW_ERROR_NONE)
       {
+        printf("[CMW] sensor start failed=%ld\r\n", (long)ret);
         return CMW_ERROR_COMPONENT_FAILURE;
       }
     }
@@ -363,6 +371,7 @@ int32_t CMW_CAMERA_Start(uint32_t pipe, uint8_t *pbuff, uint32_t mode)
   }
 
   /* Return CMW status */
+  printf("[CMW] start pipe=%lu done\r\n", (unsigned long)pipe);
   return ret;
 }
 
@@ -995,8 +1004,10 @@ static ISP_StatusTypeDef CB_ISP_GetSensorInfo(uint32_t camera_instance, ISP_Sens
 
 static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
 {
-
-  printf("CMW_CAMERA_DVP_Init \n\r");
+  printf("[CMW] DVP init requested %lux%lu fps=%ld\r\n",
+         (unsigned long)initSensors_params->width,
+         (unsigned long)initSensors_params->height,
+         (long)initSensors_params->fps);
   int32_t ret = CMW_ERROR_NONE;
 #if !CMW_CAMERA_USE_DVP
   DCMIPP_CSI_ConfTypeDef csi_conf = { 0 };
@@ -1009,14 +1020,16 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
   CMW_DVP_config_t *sensor_config;
   memset(&Camera_Drv, 0, sizeof(Camera_Drv));
 
-  default_sensor_config.pixel_format = CMW_PIXEL_FORMAT_RAW10;
+  default_sensor_config.pixel_format = CMW_PIXEL_FORMAT_YUV422_8;
   initSensors_params->sensor_config = initSensors_params->sensor_config ? initSensors_params->sensor_config : &default_sensor_config;
   sensor_config = (CMW_DVP_config_t *)(initSensors_params->sensor_config);
+  printf("[CMW] sensor pixel_format=%lu\r\n", (unsigned long)sensor_config->pixel_format);
 
   if ((initSensors_params->width == 0U) || (initSensors_params->height == 0U))
   {
-    initSensors_params->width = 1280;
-    initSensors_params->height = 720;
+    initSensors_params->width = 1920;
+    initSensors_params->height = 1080;
+    printf("[CMW] DVP init defaulted to 1920x1080\r\n");
   }
 
   /* DVP path: configure parallel receiver instead of CSI host/VC. */
@@ -1035,8 +1048,16 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
   ret = HAL_DCMIPP_PARALLEL_SetConfig(&hcamera_dcmipp, &parallel_conf);
   if (ret != HAL_OK)
   {
+    printf("[CMW] DVP parallel config failed=%ld\r\n", (long)ret);
     return CMW_ERROR_PERIPH_FAILURE;
   }
+
+  printf("[CMW] DVP cfg fmt=%lu hspol=%lu vspol=%lu pckpol=%lu if=%lu\r\n",
+         (unsigned long)parallel_conf.Format,
+         (unsigned long)parallel_conf.HSPolarity,
+         (unsigned long)parallel_conf.VSPolarity,
+         (unsigned long)parallel_conf.PCKPolarity,
+         (unsigned long)parallel_conf.ExtendedDataMode);
 #else
   switch (sensor_config->pixel_format)
   {
@@ -1079,6 +1100,8 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
     }
   }
 #endif
+
+  printf("[CMW] DVP init done\r\n");
 
 
   return ret;

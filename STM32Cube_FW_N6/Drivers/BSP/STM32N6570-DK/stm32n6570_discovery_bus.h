@@ -96,7 +96,7 @@ typedef struct
 
 /* Definition for I2C2 Pins */
 #define BUS_I2C2_SCL_PIN                       GPIO_PIN_14
-#define BUS_I2C2_SDA_PIN                       GPIO_PIN_4
+#define BUS_I2C2_SDA_PIN                       GPIO_PIN_15
 #define BUS_I2C2_SCL_GPIO_PORT                 GPIOD
 #define BUS_I2C2_SDA_GPIO_PORT                 GPIOD
 #define BUS_I2C2_SCL_AF                        GPIO_AF4_I2C2

@@ -19,12 +19,19 @@
 #ifndef APP_H
 #define APP_H
 
+#include "app_config.h"
 #include "stai_network.h"
 
 #define VENC_WIDTH CAM_GetVencWidth()
 #define VENC_HEIGHT CAM_GetVencHeight()
+#if APP_DVP_BRINGUP_PIPE1_ONLY
+/* In bring-up mode, keep PIPE1 in YUV422 so we can inspect raw-like camera bytes. */
+#define CAPTURE_FORMAT DCMIPP_PIXEL_PACKER_FORMAT_YUV422_1
+#define CAPTURE_BPP 2
+#else
 #define CAPTURE_FORMAT DCMIPP_PIXEL_PACKER_FORMAT_ARGB8888
 #define CAPTURE_BPP 4
+#endif
 
 /* Model Related Info */
 #define NN_WIDTH STAI_NETWORK_IN_1_WIDTH

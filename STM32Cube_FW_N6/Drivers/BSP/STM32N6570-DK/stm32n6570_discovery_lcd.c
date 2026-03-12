@@ -1349,7 +1349,7 @@ static void LTDC_MspInit(LTDC_HandleTypeDef *hltdc)
     /* STM32N6570-DK MB1860A RK050HR18 */
     /* PG0  R0          */
     /* PD9  R1          */
-    /* PD15 R2          */
+    /* PD15 R2 (unused here to keep I2C2_SDA on PD15 for PX9210K) */
     /* PB4  R3          */ // JTAG
     /* PH4  R4          */
     /* PA15 R5          */ // JTAG JTDI
@@ -1403,8 +1403,8 @@ static void LTDC_MspInit(LTDC_HandleTypeDef *hltdc)
     gpio_init_structure.Alternate = GPIO_AF14_LCD;
     HAL_GPIO_Init(GPIOB, &gpio_init_structure);
 
-    /* R7, R1, R2 */
-    gpio_init_structure.Pin       = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_15;
+    /* R7, R1 */
+    gpio_init_structure.Pin       = GPIO_PIN_8 | GPIO_PIN_9;
     gpio_init_structure.Alternate = GPIO_AF14_LCD;
     HAL_GPIO_Init(GPIOD, &gpio_init_structure);
 

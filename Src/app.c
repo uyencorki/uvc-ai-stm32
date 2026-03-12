@@ -64,40 +64,85 @@
 
 #define CAPTURE_BUFFER_NB (CAPTURE_DELAY + 2)
 
+static int BOARD_PinIsAf(GPIO_TypeDef *port, uint32_t pin_index, uint32_t af)
+{
+  uint32_t mode = (port->MODER >> (pin_index * 2U)) & 0x3U;
+  uint32_t afr = (pin_index < 8U) ?
+                 ((port->AFR[0] >> (pin_index * 4U)) & 0xFU) :
+                 ((port->AFR[1] >> ((pin_index - 8U) * 4U)) & 0xFU);
+
+  return (mode == 0x2U) && (afr == af);
+}
+
+static int BOARD_PinIsOutput(GPIO_TypeDef *port, uint32_t pin_index)
+{
+  uint32_t mode = (port->MODER >> (pin_index * 2U)) & 0x3U;
+  return (mode == 0x1U);
+}
+
 void BOARD_Pins_Init_DCMIPP(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+  int iomux_ok = 1;
+
+  printf("[IOMUX] PX9210K DVP pinmux start\r\n");
 
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOE_CLK_ENABLE();
-  __HAL_RCC_GPION_CLK_ENABLE();
 
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
 
-  /* PB6/PB7/PB8/PB9 => D6/D7/VSYNC/D3 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
+  /* PB5/PB6/PB7/PB8/PB9 => D6/D5/D7/VSYNC/D3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
   GPIO_InitStruct.Alternate = GPIO_AF9_DCMIPP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /* PC6 => D1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  /* PC6/PC7/PC9/PC10 => D1/D8/D2/D4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_9 | GPIO_PIN_10;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /* PD0/PD5/PD7 => HSYNC/PIXCLK/D0 */
   GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_5 | GPIO_PIN_7;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* PE0/PE8 => D2/D4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_8;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+  /* PC8 => RESET_N (keep de-asserted) */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = 0U;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, GPIO_PIN_SET);
 
-  /* PN9 => D5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_9;
-  HAL_GPIO_Init(GPION, &GPIO_InitStruct);
+  iomux_ok &= BOARD_PinIsAf(GPIOB, 5U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOB, 6U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOB, 7U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOB, 8U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOB, 9U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOC, 6U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOC, 7U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOC, 9U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOC, 10U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOD, 0U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOD, 5U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsAf(GPIOD, 7U, GPIO_AF9_DCMIPP);
+  iomux_ok &= BOARD_PinIsOutput(GPIOC, 8U);
+
+  if (iomux_ok != 0)
+  {
+    printf("[IOMUX] PX9210K DVP/RESET pinmux OK\r\n");
+  }
+  else
+  {
+    printf("[IOMUX] PX9210K pinmux verify FAILED\r\n");
+    assert(0);
+  }
+
+  printf("[IOMUX] DVP: PB5 PB6 PB7 PB8 PB9, PC6 PC7 PC9 PC10, PD7 PD5 PD0\r\n");
+  printf("[IOMUX] CTRL: PC8(RESET_N), I2C1(PH9/PC1) owned by BSP\r\n");
 }
 
 /* venc conf */
@@ -166,6 +211,168 @@ static SemaphoreHandle_t stat_info_lock;
 static StaticSemaphore_t stat_info_lock_buffer;
 static stat_info_t stat_info;
 static cpuload_info_t cpu_load;
+static int g_pipe1_first_frame_logged;
+static int g_pipe2_first_frame_logged;
+static int g_pipe1_first_vsync_logged;
+static uint32_t g_pipe1_frame_irq_count;
+static uint32_t g_pipe2_frame_irq_count;
+static uint32_t g_pipe1_vsync_irq_count;
+static uint32_t g_pipe_error_irq_count[3];
+static uint32_t g_cam_health_last_ms;
+static uint32_t g_cam_health_last_pipe1_frame;
+static uint32_t g_cam_health_last_pipe2_frame;
+static uint32_t g_cam_health_last_pipe1_vsync;
+static uint32_t g_cam_health_last_pipe_err[3];
+static uint32_t g_pipe1_rearm_ok_count;
+static uint32_t g_pipe1_rearm_fail_count;
+static int g_pipe1_first_frame_pending_log;
+static int g_pipe2_first_frame_pending_log;
+static int g_pipe1_first_vsync_pending_log;
+static int g_pipe1_first_rearm_ok_pending_log;
+static int g_pipe1_rearm_fail_pending_log;
+static int g_pipe1_rearm_fail_last_ret;
+static uint32_t g_pipe1_rearm_fail_last_state;
+static int g_pipe1_rearm_fail_last_disp_idx;
+static int g_pipe1_rearm_fail_last_capt_idx;
+static int g_pipe1_rearm_fail_last_next_idx;
+static int g_pipe1_first_rearm_ok_next_idx;
+static uint32_t g_pipe1_first_rearm_ok_addr;
+static int g_pipe1_first_dump_done;
+static uint8_t g_pipe1_first16_snapshot[16];
+static uint8_t g_pipe1_first64_snapshot[64];
+static int g_pipe1_first16_snapshot_ready;
+
+/* Forward declarations: used by early debug dump helper before full definitions below. */
+static uint8_t capture_buffer[CAPTURE_BUFFER_NB][VENC_MAX_WIDTH * VENC_MAX_HEIGHT * CAPTURE_BPP];
+static int capture_buffer_disp_idx;
+
+static void app_dump_pipe1_first_bytes_once(void)
+{
+  uint8_t *buf;
+  uint32_t sum16;
+  uint32_t sum64;
+  uint32_t frame_pitch;
+  uint32_t frame_bytes;
+  int i;
+
+  if ((g_pipe1_first_dump_done != 0) || (g_pipe1_first16_snapshot_ready == 0))
+  {
+    return;
+  }
+
+  buf = g_pipe1_first16_snapshot;
+  sum16 = 0U;
+  for (i = 0; i < 16; i++)
+  {
+    sum16 += buf[i];
+  }
+
+    sum64 = 0U;
+    for (i = 0; i < 64; i++)
+    {
+      sum64 += g_pipe1_first64_snapshot[i];
+    }
+
+    frame_pitch = (uint32_t)VENC_WIDTH * (uint32_t)CAPTURE_BPP;
+    frame_bytes = (uint32_t)VENC_WIDTH * (uint32_t)VENC_HEIGHT * (uint32_t)CAPTURE_BPP;
+
+    printf("[CAM][FRAME] pipe1 out=%dx%d bpp=%d pitch=%lu bytes=%lu fmt=%d\r\n",
+      VENC_WIDTH,
+      VENC_HEIGHT,
+      CAPTURE_BPP,
+      (unsigned long)frame_pitch,
+      (unsigned long)frame_bytes,
+      CAPTURE_FORMAT);
+
+  printf("[CAM][DATA] PIPE1 first 10 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+         buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9]);
+    printf("[CAM][DATA] PIPE1 first16_sum=%lu first64_sum=%lu addr=0x%08lX bpp=%d\r\n",
+         (unsigned long)sum16,
+      (unsigned long)sum64,
+         (unsigned long)buf,
+         CAPTURE_BPP);
+
+  g_pipe1_first_dump_done = 1;
+}
+
+static void app_log_cam_health_1s(void)
+{
+  uint32_t now_ms = HAL_GetTick();
+
+  if ((now_ms - g_cam_health_last_ms) < 1000U)
+  {
+    return;
+  }
+
+    printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu)\r\n",
+         (unsigned long)(g_pipe1_frame_irq_count - g_cam_health_last_pipe1_frame),
+         (unsigned long)(g_pipe2_frame_irq_count - g_cam_health_last_pipe2_frame),
+         (unsigned long)(g_pipe1_vsync_irq_count - g_cam_health_last_pipe1_vsync),
+      (unsigned long)g_pipe1_rearm_ok_count,
+      (unsigned long)g_pipe1_rearm_fail_count,
+         (unsigned long)(g_pipe_error_irq_count[0] - g_cam_health_last_pipe_err[0]),
+         (unsigned long)(g_pipe_error_irq_count[1] - g_cam_health_last_pipe_err[1]),
+         (unsigned long)(g_pipe_error_irq_count[2] - g_cam_health_last_pipe_err[2]),
+         (unsigned long)g_pipe_error_irq_count[0],
+         (unsigned long)g_pipe_error_irq_count[1],
+         (unsigned long)g_pipe_error_irq_count[2]);
+
+  g_cam_health_last_ms = now_ms;
+  g_cam_health_last_pipe1_frame = g_pipe1_frame_irq_count;
+  g_cam_health_last_pipe2_frame = g_pipe2_frame_irq_count;
+  g_cam_health_last_pipe1_vsync = g_pipe1_vsync_irq_count;
+  g_cam_health_last_pipe_err[0] = g_pipe_error_irq_count[0];
+  g_cam_health_last_pipe_err[1] = g_pipe_error_irq_count[1];
+  g_cam_health_last_pipe_err[2] = g_pipe_error_irq_count[2];
+}
+
+static void app_flush_cam_irq_logs(void)
+{
+  if (g_pipe1_first_vsync_pending_log != 0)
+  {
+    g_pipe1_first_vsync_pending_log = 0;
+    printf("[CAM] pipe1 first VSYNC IRQ\r\n");
+  }
+
+  if (g_pipe1_first_frame_pending_log != 0)
+  {
+    g_pipe1_first_frame_pending_log = 0;
+    printf("[CAM] pipe1 first frame IRQ\r\n");
+  }
+
+  if (g_pipe2_first_frame_pending_log != 0)
+  {
+    g_pipe2_first_frame_pending_log = 0;
+    printf("[CAM] pipe2 first frame IRQ\r\n");
+  }
+
+  if (g_pipe1_first_rearm_ok_pending_log != 0)
+  {
+    g_pipe1_first_rearm_ok_pending_log = 0;
+    printf("[CAM] pipe1 rearm OK next_capt_idx=%d addr=0x%08lX\r\n",
+           g_pipe1_first_rearm_ok_next_idx,
+           (unsigned long)g_pipe1_first_rearm_ok_addr);
+  }
+
+  if (g_pipe1_rearm_fail_pending_log != 0)
+  {
+    g_pipe1_rearm_fail_pending_log = 0;
+    printf("[CAM][ERR] pipe1 rearm failed ret=%d state=%lu disp_idx=%d capt_idx=%d next=%d\r\n",
+           g_pipe1_rearm_fail_last_ret,
+           (unsigned long)g_pipe1_rearm_fail_last_state,
+           g_pipe1_rearm_fail_last_disp_idx,
+           g_pipe1_rearm_fail_last_capt_idx,
+           g_pipe1_rearm_fail_last_next_idx);
+  }
+}
+
+void APP_CAM_DebugOnPipeError(uint32_t pipe)
+{
+  if (pipe < 3U)
+  {
+    g_pipe_error_irq_count[pipe]++;
+  }
+}
 
 /* dma2d */
 static SemaphoreHandle_t dma2d_lock;
@@ -200,10 +407,12 @@ static volatile int buffer_flying;
 static int force_intra;
 
  /* threads */
+#if !APP_DVP_BRINGUP_PIPE1_ONLY
 static StaticTask_t nn_thread;
 static StackType_t nn_thread_stack[2 * configMINIMAL_STACK_SIZE];
 static StaticTask_t dp_thread;
 static StackType_t dp_thread_stack[2 *configMINIMAL_STACK_SIZE];
+#endif
 static StaticTask_t isp_thread;
 static StackType_t isp_thread_stack[2 *configMINIMAL_STACK_SIZE];
 static SemaphoreHandle_t isp_sem;
@@ -364,7 +573,7 @@ static void bqueue_put_ready(bqueue_t *bq)
   }
 }
 
-static void app_main_pipe_frame_event()
+static int app_main_pipe_frame_event(void)
 {
   int next_disp_idx = (capture_buffer_disp_idx + 1) % CAPTURE_BUFFER_NB;
   int next_capt_idx = (capture_buffer_capt_idx + 1) % CAPTURE_BUFFER_NB;
@@ -372,10 +581,30 @@ static void app_main_pipe_frame_event()
 
   ret = HAL_DCMIPP_PIPE_SetMemoryAddress(CMW_CAMERA_GetDCMIPPHandle(), DCMIPP_PIPE1,
                                          DCMIPP_MEMORY_ADDRESS_0, (uint32_t) capture_buffer[next_capt_idx]);
-  assert(ret == HAL_OK);
+  if (ret != HAL_OK)
+  {
+    g_pipe1_rearm_fail_count++;
+    g_pipe1_rearm_fail_last_ret = ret;
+    g_pipe1_rearm_fail_last_state = HAL_DCMIPP_PIPE_GetState(CMW_CAMERA_GetDCMIPPHandle(), DCMIPP_PIPE1);
+    g_pipe1_rearm_fail_last_disp_idx = capture_buffer_disp_idx;
+    g_pipe1_rearm_fail_last_capt_idx = capture_buffer_capt_idx;
+    g_pipe1_rearm_fail_last_next_idx = next_capt_idx;
+    g_pipe1_rearm_fail_pending_log = 1;
+    return ret;
+  }
 
   capture_buffer_disp_idx = next_disp_idx;
   capture_buffer_capt_idx = next_capt_idx;
+  g_pipe1_rearm_ok_count++;
+
+  if (g_pipe1_rearm_ok_count == 1U)
+  {
+    g_pipe1_first_rearm_ok_next_idx = next_capt_idx;
+    g_pipe1_first_rearm_ok_addr = (uint32_t)capture_buffer[next_capt_idx];
+    g_pipe1_first_rearm_ok_pending_log = 1;
+  }
+
+  return HAL_OK;
 }
 
 static void app_ancillary_pipe_frame_event()
@@ -402,6 +631,7 @@ static void app_main_pipe_vsync_event()
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+#if !APP_DVP_BRINGUP_PIPE1_ONLY
 static void nn_thread_fct(void *arg)
 {
   stai_network_info info;
@@ -473,6 +703,7 @@ static void nn_thread_fct(void *arg)
     time_stat_update(&stat_info.nn_total_time, HAL_GetTick() - total_ts);
   }
 }
+#endif
 
 static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
 {
@@ -697,6 +928,7 @@ static int display_new_frame(od_pp_out_t *pp_out)
   return uvc_is_active_local;
 }
 
+#if !APP_DVP_BRINGUP_PIPE1_ONLY
 static void dp_thread_fct(void *arg)
 {
   od_yolov2_pp_static_param_t pp_params;
@@ -738,16 +970,22 @@ static void dp_thread_fct(void *arg)
     bqueue_put_free(&nn_output_queue);
   }
 }
+#endif
 
 static void isp_thread_fct(void *arg)
 {
   int ret;
 
   while (1) {
-    ret = xSemaphoreTake(isp_sem, portMAX_DELAY);
-    assert(ret == pdTRUE);
+    ret = xSemaphoreTake(isp_sem, pdMS_TO_TICKS(1000));
+    if (ret == pdTRUE)
+    {
+      CAM_IspUpdate();
+    }
 
-    CAM_IspUpdate();
+    app_flush_cam_irq_logs();
+    app_log_cam_health_1s();
+    app_dump_pipe1_first_bytes_once();
   }
 }
 
@@ -791,14 +1029,27 @@ static void app_display_info_header()
 void app_run()
 {
   UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
+#if !APP_DVP_BRINGUP_PIPE1_ONLY
   UBaseType_t dp_priority = FREERTOS_PRIORITY(-2);
   UBaseType_t nn_priority = FREERTOS_PRIORITY(1);
+#endif
   UVCL_Conf_t uvcl_conf = { 0 };
   ENC_Conf_t enc_conf = { 0 };
   TaskHandle_t hdl;
   int ret;
 
   app_display_info_header();
+    printf("[APP] cfg sensor=%dx%d venc=%dx%d pipe1_only=%d\r\n",
+      SENSOR_DVP_WIDTH,
+      SENSOR_DVP_HEIGHT,
+      VENC_DVP_WIDTH,
+      VENC_DVP_HEIGHT,
+      APP_DVP_BRINGUP_PIPE1_ONLY);
+    printf("[APP] buf capture0=0x%08lX captureN=%d nn_in0=0x%08lX nn_out0=0x%08lX\r\n",
+      (unsigned long)capture_buffer[0],
+      CAPTURE_BUFFER_NB,
+      (unsigned long)nn_input_buffers[0],
+      (unsigned long)nn_output_buffers[0]);
   /* Enable DWT so DWT_CYCCNT works when debugger not attached */
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
 
@@ -858,12 +1109,16 @@ void app_run()
   CAM_DisplayPipe_Start(capture_buffer[0], CMW_MODE_CONTINUOUS);
 
   /* threads init */
+#if APP_DVP_BRINGUP_PIPE1_ONLY
+  printf("[CAM] bring-up mode enabled: NN/PIPE2 and DP threads are skipped\r\n");
+#else
   hdl = xTaskCreateStatic(nn_thread_fct, "nn", configMINIMAL_STACK_SIZE * 2, NULL, nn_priority, nn_thread_stack,
                           &nn_thread);
   assert(hdl != NULL);
   hdl = xTaskCreateStatic(dp_thread_fct, "dp", configMINIMAL_STACK_SIZE * 2, NULL, dp_priority, dp_thread_stack,
                           &dp_thread);
   assert(hdl != NULL);
+#endif
   hdl = xTaskCreateStatic(isp_thread_fct, "isp", configMINIMAL_STACK_SIZE * 2, NULL, isp_priority, isp_thread_stack,
                           &isp_thread);
   assert(hdl != NULL);
@@ -873,8 +1128,45 @@ void app_run()
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
 {
+  if ((pipe == DCMIPP_PIPE1) && (g_pipe1_first_frame_logged == 0))
+  {
+    int i;
+    uint8_t *src;
+
+    g_pipe1_first_frame_logged = 1;
+    g_pipe1_first_frame_pending_log = 1;
+
+    /* Capture a small snapshot in ISR, then print it later in task context. */
+    src = capture_buffer[capture_buffer_disp_idx];
+    for (i = 0; i < 16; i++)
+    {
+      g_pipe1_first16_snapshot[i] = src[i];
+    }
+    for (i = 0; i < 64; i++)
+    {
+      g_pipe1_first64_snapshot[i] = src[i];
+    }
+    g_pipe1_first16_snapshot_ready = 1;
+  }
+  else if ((pipe == DCMIPP_PIPE2) && (g_pipe2_first_frame_logged == 0))
+  {
+    g_pipe2_first_frame_logged = 1;
+    g_pipe2_first_frame_pending_log = 1;
+  }
+
   if (pipe == DCMIPP_PIPE1)
-    app_main_pipe_frame_event();
+  {
+    g_pipe1_frame_irq_count++;
+  }
+  else if (pipe == DCMIPP_PIPE2)
+  {
+    g_pipe2_frame_irq_count++;
+  }
+
+  if (pipe == DCMIPP_PIPE1)
+  {
+    (void)app_main_pipe_frame_event();
+  }
   else if (pipe == DCMIPP_PIPE2)
     app_ancillary_pipe_frame_event();
 
@@ -883,6 +1175,17 @@ int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
 
 int CMW_CAMERA_PIPE_VsyncEventCallback(uint32_t pipe)
 {
+  if ((pipe == DCMIPP_PIPE1) && (g_pipe1_first_vsync_logged == 0))
+  {
+    g_pipe1_first_vsync_logged = 1;
+    g_pipe1_first_vsync_pending_log = 1;
+  }
+
+  if (pipe == DCMIPP_PIPE1)
+  {
+    g_pipe1_vsync_irq_count++;
+  }
+
   if (pipe == DCMIPP_PIPE1)
     app_main_pipe_vsync_event();
 

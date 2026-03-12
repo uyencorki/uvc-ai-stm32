@@ -73,6 +73,7 @@ extern "C" {
   #define CMW_I2C_WRITEREG16 BSP_I2C2_WriteReg16
 #else
 /* Discovery board */
+  /* PX9210K control bus wired to I2C1: SCL=PH9, SDA=PC1 */
   #define CMW_I2C_INIT BSP_I2C1_Init
   #define CMW_I2C_DEINIT BSP_I2C1_DeInit
   #define CMW_I2C_READREG16 BSP_I2C1_ReadReg16

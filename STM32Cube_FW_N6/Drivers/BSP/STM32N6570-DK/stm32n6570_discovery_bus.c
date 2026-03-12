@@ -1266,7 +1266,7 @@ static void I2C2_MspInit(I2C_HandleTypeDef *phi2c)
   /* Configure I2C Tx as alternate function */
   gpio_init_structure.Pin       = BUS_I2C2_SCL_PIN;
   gpio_init_structure.Mode      = GPIO_MODE_AF_OD;
-  gpio_init_structure.Pull      = GPIO_NOPULL;
+  gpio_init_structure.Pull      = GPIO_PULLUP;
   gpio_init_structure.Speed     = GPIO_SPEED_FREQ_HIGH;
   gpio_init_structure.Alternate = BUS_I2C2_SCL_AF;
   HAL_GPIO_Init(BUS_I2C2_SCL_GPIO_PORT, &gpio_init_structure);
@@ -1274,7 +1274,7 @@ static void I2C2_MspInit(I2C_HandleTypeDef *phi2c)
   /* Configure I2C Rx as alternate function */
   gpio_init_structure.Pin       = BUS_I2C2_SDA_PIN;
   gpio_init_structure.Mode      = GPIO_MODE_AF_OD;
-  gpio_init_structure.Pull      = GPIO_NOPULL;
+  gpio_init_structure.Pull      = GPIO_PULLUP;
   gpio_init_structure.Speed     = GPIO_SPEED_FREQ_HIGH;
   gpio_init_structure.Alternate = BUS_I2C2_SDA_AF;
   HAL_GPIO_Init(BUS_I2C2_SDA_GPIO_PORT, &gpio_init_structure);

@@ -60,6 +60,12 @@ void vPortSetupTimerInterrupt(void);
   */
 int main(void)
 {
+
+  CONSOLE_Config();
+
+  printf ("========================================== \r\n");
+  printf ("------ run app ---------  \r\n");
+
   /* Power on ICACHE */
   MEMSYSCTL->MSCR |= MEMSYSCTL_MSCR_ICACTIVE_Msk;
 
@@ -68,6 +74,9 @@ int main(void)
   __HAL_RCC_SYSCLK_CONFIG(RCC_SYSCLKSOURCE_HSI);
 
   HAL_Init();
+
+  CONSOLE_Config();
+
 
   BOARD_Pins_Init_DCMIPP();
 
@@ -345,11 +354,8 @@ static void main_thread_fct(void *arg)
   SystemClock_Config();
   vPortSetupTimerInterrupt();
 
-  printf ("CONSOLE_Config  before \r\n");
-
   CONSOLE_Config();
 
-  printf ("CONSOLE_Config  after \r\n");
 
 
   NPURam_enable();
