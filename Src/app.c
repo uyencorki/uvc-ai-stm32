@@ -994,7 +994,8 @@ static void isp_thread_fct(void *arg)
 
     app_flush_cam_irq_logs();
     app_log_cam_health_1s();
-    app_dump_pipe1_first_bytes_once();
+    /* Temporarily disable first-frame data dump logs during bring-up. */
+    /* app_dump_pipe1_first_bytes_once(); */
   }
 }
 
@@ -1103,6 +1104,14 @@ void app_run()
   uvcl_cbs.streaming_inactive = app_uvc_streaming_inactive;
   uvcl_cbs.frame_release = app_uvc_frame_release;
   ret = UVCL_Init(USB1_OTG_HS, &uvcl_conf, &uvcl_cbs);
+  if (ret == 0)
+  {
+    printf("[UVC] UVCL_Init OK (USB1_OTG_HS)\r\n");
+  }
+  else
+  {
+    printf("[UVC][ERR] UVCL_Init failed ret=%d\r\n", ret);
+  }
 
   /* sems + mutex init */
   isp_sem = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);
@@ -1137,41 +1146,7 @@ void app_run()
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
 {
-  if ((pipe == DCMIPP_PIPE1) && (g_pipe1_first_frame_logged == 0))
-  {
-    int i;
-    uint8_t *src;
-
-    g_pipe1_first_frame_logged = 1;
-    g_pipe1_first_frame_pending_log = 1;
-
-    /* Capture a small snapshot in ISR, then print it later in task context. */
-    src = capture_buffer[capture_buffer_disp_idx];
-    for (i = 0; i < 16; i++)
-    {
-      g_pipe1_first16_snapshot[i] = src[i];
-    }
-    for (i = 0; i < 64; i++)
-    {
-      g_pipe1_first64_snapshot[i] = src[i];
-    }
-    g_pipe1_first16_snapshot_ready = 1;
-  }
-  else if ((pipe == DCMIPP_PIPE2) && (g_pipe2_first_frame_logged == 0))
-  {
-    g_pipe2_first_frame_logged = 1;
-    g_pipe2_first_frame_pending_log = 1;
-  }
-
-  if (pipe == DCMIPP_PIPE1)
-  {
-    g_pipe1_frame_irq_count++;
-  }
-  else if (pipe == DCMIPP_PIPE2)
-  {
-    g_pipe2_frame_irq_count++;
-  }
-
+  /* Keep ISR callback minimal to avoid capture instability during bring-up. */
   if (pipe == DCMIPP_PIPE1)
   {
     (void)app_main_pipe_frame_event();

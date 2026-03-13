@@ -37,14 +37,17 @@
 /* Bring-up mode for new DVP sensors: run only PIPE1 first, then re-enable NN/PIPE2 later. */
 #define APP_DVP_BRINGUP_PIPE1_ONLY 1
 
-/* DVP timing test knobs (set 0/1 then rebuild):
- * - APP_DVP_VSYNC_ACTIVE_HIGH: 0=active low, 1=active high
- * - APP_DVP_HSYNC_ACTIVE_HIGH: 0=active low, 1=active high
- * - APP_DVP_PIXCLK_RISING_EDGE: 0=sample on falling, 1=sample on rising
+/* DVP timing test selector (1..8), then rebuild and retest.
+ * bit2: VSYNC polarity (0=active low, 1=active high)
+ * bit1: HSYNC polarity (0=active low, 1=active high)
+ * bit0: PCLK edge      (0=falling,    1=rising)
+ * Example: case=2 -> 001b => VSYNC low, HSYNC low, PCLK rising.
  */
-#define APP_DVP_VSYNC_ACTIVE_HIGH 0
-#define APP_DVP_HSYNC_ACTIVE_HIGH 0
-#define APP_DVP_PIXCLK_RISING_EDGE 1
+#define APP_DVP_TEST_CASE 3
+
+#define APP_DVP_VSYNC_ACTIVE_HIGH   (((APP_DVP_TEST_CASE) - 1) >> 2 & 0x1)
+#define APP_DVP_HSYNC_ACTIVE_HIGH   (((APP_DVP_TEST_CASE) - 1) >> 1 & 0x1)
+#define APP_DVP_PIXCLK_RISING_EDGE  (((APP_DVP_TEST_CASE) - 1) >> 0 & 0x1)
 
 /* PX9210K I2C debug dump. */
 #define APP_PX9210_I2C_DUMP_ENABLE 0
