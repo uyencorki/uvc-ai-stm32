@@ -35,7 +35,7 @@
 #define CAPTURE_DELAY 1
 
 /* Bring-up mode for new DVP sensors: run only PIPE1 first, then re-enable NN/PIPE2 later. */
-#define APP_DVP_BRINGUP_PIPE1_ONLY 1
+#define APP_DVP_BRINGUP_PIPE1_ONLY 0
 
 /* DVP timing test selector (1..8), then rebuild and retest.
  * bit2: VSYNC polarity (0=active low, 1=active high)

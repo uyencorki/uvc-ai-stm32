@@ -250,10 +250,63 @@ static int g_pipe1_first_dump_done;
 static uint8_t g_pipe1_first16_snapshot[16];
 static uint8_t g_pipe1_first64_snapshot[64];
 static int g_pipe1_first16_snapshot_ready;
+static volatile int g_pipe1_snapshot_pending;
+static volatile int g_pipe1_snapshot_idx;
 
 /* Forward declarations: used by early debug dump helper before full definitions below. */
 static uint8_t capture_buffer[CAPTURE_BUFFER_NB][VENC_MAX_WIDTH * VENC_MAX_HEIGHT * CAPTURE_BPP];
 static int capture_buffer_disp_idx;
+static int is_cache_enable(void);
+
+static void app_capture_pipe1_snapshot_once(uint8_t *src)
+{
+  int i;
+
+  if ((g_pipe1_first16_snapshot_ready != 0) || (src == NULL))
+  {
+    return;
+  }
+
+  CACHE_OP(SCB_InvalidateDCache_by_Addr(src, 64));
+
+  for (i = 0; i < 16; i++)
+  {
+    g_pipe1_first16_snapshot[i] = src[i];
+  }
+
+  for (i = 0; i < 64; i++)
+  {
+    g_pipe1_first64_snapshot[i] = src[i];
+  }
+
+  g_pipe1_first16_snapshot_ready = 1;
+}
+
+static void app_capture_pipe1_snapshot_if_pending(void)
+{
+  int idx;
+
+  if (g_pipe1_first16_snapshot_ready != 0)
+  {
+    g_pipe1_snapshot_pending = 0;
+    return;
+  }
+
+  if (g_pipe1_snapshot_pending == 0)
+  {
+    return;
+  }
+
+  idx = g_pipe1_snapshot_idx;
+  g_pipe1_snapshot_pending = 0;
+
+  if ((idx < 0) || (idx >= CAPTURE_BUFFER_NB))
+  {
+    return;
+  }
+
+  app_capture_pipe1_snapshot_once(capture_buffer[idx]);
+}
 
 static void app_dump_pipe1_first_bytes_once(void)
 {
@@ -427,7 +480,7 @@ static StackType_t isp_thread_stack[2 *configMINIMAL_STACK_SIZE];
 static SemaphoreHandle_t isp_sem;
 static StaticSemaphore_t isp_sem_buffer;
 
-static int is_cache_enable()
+static int is_cache_enable(void)
 {
 #if defined(USE_DCACHE)
   return 1;
@@ -994,8 +1047,8 @@ static void isp_thread_fct(void *arg)
 
     app_flush_cam_irq_logs();
     app_log_cam_health_1s();
-    /* Temporarily disable first-frame data dump logs during bring-up. */
-    /* app_dump_pipe1_first_bytes_once(); */
+    app_capture_pipe1_snapshot_if_pending();
+    app_dump_pipe1_first_bytes_once();
   }
 }
 
