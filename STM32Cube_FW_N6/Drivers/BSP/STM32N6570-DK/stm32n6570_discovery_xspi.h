@@ -33,9 +33,39 @@ extern "C" {
 #define USE_NOR_MEMORY_MX66UW1G45G           1
 #endif /* USE_NOR_MEMORY_MX66UW1G45G */
 
+#ifndef BSP_XSPI_NOR_FLASH_SIZE_BYTES
+/* PY25Q256HB: 256Mbit = 32MBytes */
+#define BSP_XSPI_NOR_FLASH_SIZE_BYTES        ((uint32_t)(32U * 1024U * 1024U))
+#endif /* BSP_XSPI_NOR_FLASH_SIZE_BYTES */
+
 #ifndef USE_RAM_MEMORY_APS256XX
 #define USE_RAM_MEMORY_APS256XX              1
 #endif /* USE_RAM_MEMORY_APS256XX */
+
+#ifndef BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT
+/*
+ * Custom board note:
+ * W958D6NBKX does not use APS256XX mode-register map.
+ * Keep vendor register writes disabled by default.
+ */
+#define BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT    1U
+#endif /* BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT */
+
+#ifndef BSP_XSPI_RAM_READ_LATENCY_CODE
+#define BSP_XSPI_RAM_READ_LATENCY_CODE       7U
+#endif /* BSP_XSPI_RAM_READ_LATENCY_CODE */
+
+#ifndef BSP_XSPI_RAM_WRITE_LATENCY_CODE
+#define BSP_XSPI_RAM_WRITE_LATENCY_CODE      7U
+#endif /* BSP_XSPI_RAM_WRITE_LATENCY_CODE */
+
+#ifndef BSP_XSPI_RAM_IO_MODE
+#define BSP_XSPI_RAM_IO_MODE                 1U /* 0: x8, 1: x16 */
+#endif /* BSP_XSPI_RAM_IO_MODE */
+
+#ifndef BSP_XSPI_RAM_BURST_TYPE
+#define BSP_XSPI_RAM_BURST_TYPE              0U /* 0: linear, 1: wrapped */
+#endif /* BSP_XSPI_RAM_BURST_TYPE */
 
 #if (USE_NOR_MEMORY_MX66UW1G45G == 1)
 #include "../Components/mx66uw1g45g/mx66uw1g45g.h"
@@ -157,16 +187,11 @@ typedef struct
 #define XSPI_NOR_CLK_DISABLE()                __HAL_RCC_XSPI2_CLK_DISABLE()
 
 #define XSPI_NOR_CLK_GPIO_CLK_ENABLE()        __HAL_RCC_GPION_CLK_ENABLE()
-#define XSPI_NOR_DQS_GPIO_CLK_ENABLE()        __HAL_RCC_GPION_CLK_ENABLE()
 #define XSPI_NOR_CS_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
 #define XSPI_NOR_D0_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
 #define XSPI_NOR_D1_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
 #define XSPI_NOR_D2_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
 #define XSPI_NOR_D3_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
-#define XSPI_NOR_D4_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
-#define XSPI_NOR_D5_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
-#define XSPI_NOR_D6_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
-#define XSPI_NOR_D7_GPIO_CLK_ENABLE()         __HAL_RCC_GPION_CLK_ENABLE()
 
 #define XSPI_NOR_FORCE_RESET()                __HAL_RCC_XSPI2_FORCE_RESET()
 #define XSPI_NOR_RELEASE_RESET()              __HAL_RCC_XSPI2_RELEASE_RESET()
@@ -176,10 +201,6 @@ typedef struct
 #define XSPI_NOR_CLK_PIN                      GPIO_PIN_6
 #define XSPI_NOR_CLK_GPIO_PORT                GPION
 #define XSPI_NOR_CLK_PIN_AF                   GPIO_AF9_XSPIM_P2
-/* XSPI_DQS */
-#define XSPI_NOR_DQS_PIN                      GPIO_PIN_0
-#define XSPI_NOR_DQS_GPIO_PORT                GPION
-#define XSPI_NOR_DQS_PIN_AF                   GPIO_AF9_XSPIM_P2
 /* XSPI_CS */
 #define XSPI_NOR_CS_PIN                       GPIO_PIN_1
 #define XSPI_NOR_CS_GPIO_PORT                 GPION
@@ -200,22 +221,6 @@ typedef struct
 #define XSPI_NOR_D3_PIN                       GPIO_PIN_5
 #define XSPI_NOR_D3_GPIO_PORT                 GPION
 #define XSPI_NOR_D3_PIN_AF                    GPIO_AF9_XSPIM_P2
-/* XSPI_D4 */
-#define XSPI_NOR_D4_PIN                       GPIO_PIN_8
-#define XSPI_NOR_D4_GPIO_PORT                 GPION
-#define XSPI_NOR_D4_PIN_AF                    GPIO_AF9_XSPIM_P2
-/* XSPI_D5 */
-#define XSPI_NOR_D5_PIN                       GPIO_PIN_9
-#define XSPI_NOR_D5_GPIO_PORT                 GPION
-#define XSPI_NOR_D5_PIN_AF                    GPIO_AF9_XSPIM_P2
-/* XSPI_D6 */
-#define XSPI_NOR_D6_PIN                       GPIO_PIN_10
-#define XSPI_NOR_D6_GPIO_PORT                 GPION
-#define XSPI_NOR_D6_PIN_AF                    GPIO_AF9_XSPIM_P2
-/* XSPI_D7 */
-#define XSPI_NOR_D7_PIN                       GPIO_PIN_11
-#define XSPI_NOR_D7_GPIO_PORT                 GPION
-#define XSPI_NOR_D7_PIN_AF                    GPIO_AF9_XSPIM_P2
 #endif /* (USE_NOR_MEMORY_MX66UW1G45G == 1) */
 
 #if (USE_RAM_MEMORY_APS256XX == 1)
@@ -227,6 +232,7 @@ typedef struct
 #define XSPI_RAM_CLK_DISABLE()                __HAL_RCC_XSPI1_CLK_DISABLE()
 
 #define XSPI_RAM_CLK_GPIO_CLK_ENABLE()        __HAL_RCC_GPIOO_CLK_ENABLE()
+#define XSPI_RAM_CLK_N_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOO_CLK_ENABLE()
 #define XSPI_RAM_DQS_GPIO_CLK_ENABLE()        __HAL_RCC_GPIOO_CLK_ENABLE()
 #define XSPI_RAM_CS_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOO_CLK_ENABLE()
 #define XSPI_RAM_D0_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOP_CLK_ENABLE()
@@ -246,6 +252,10 @@ typedef struct
 #define XSPI_RAM_CLK_PIN                      GPIO_PIN_4
 #define XSPI_RAM_CLK_GPIO_PORT                GPIOO
 #define XSPI_RAM_CLK_PIN_AF                   GPIO_AF9_XSPIM_P1
+/* XSPI_CLK_N */
+#define XSPI_RAM_CLK_N_PIN                    GPIO_PIN_5
+#define XSPI_RAM_CLK_N_GPIO_PORT              GPIOO
+#define XSPI_RAM_CLK_N_PIN_AF                 GPIO_AF9_XSPIM_P1
 /* XSPI_DQS0 */
 #define XSPI_RAM_DQS0_PIN                     GPIO_PIN_2
 #define XSPI_RAM_DQS0_GPIO_PORT               GPIOO

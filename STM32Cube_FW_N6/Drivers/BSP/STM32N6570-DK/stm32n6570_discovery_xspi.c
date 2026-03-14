@@ -200,7 +200,6 @@ static void XSPI_RAM_MspDeInit(const XSPI_HandleTypeDef *hxspi);
 int32_t BSP_XSPI_NOR_Init(uint32_t Instance, BSP_XSPI_NOR_Init_t *Init)
 {
   int32_t ret;
-  BSP_XSPI_NOR_Info_t pInfo;
   MX_XSPI_InitTypeDef xspi_init;
 
   /* Check if the instance is supported */
@@ -227,12 +226,9 @@ int32_t BSP_XSPI_NOR_Init(uint32_t Instance, BSP_XSPI_NOR_Init_t *Init)
       }
 #endif /* USE_HAL_XSPI_REGISTER_CALLBACKS */
 
-      /* Get Flash information of one memory */
-      (void)MX66UW1G45G_GetFlashInfo(&pInfo);
-
       /* Fill config structure */
       xspi_init.ClockPrescaler = 0x03; /* XSPI clock = 200MHz / ClockPrescaler = 50MHz, then switch to 200MHz*/
-      xspi_init.MemorySize     = (uint32_t)POSITION_VAL((uint32_t)pInfo.FlashSize) - 1U;
+      xspi_init.MemorySize     = (uint32_t)POSITION_VAL((uint32_t)BSP_XSPI_NOR_FLASH_SIZE_BYTES) - 1U;
       xspi_init.SampleShifting = HAL_XSPI_SAMPLE_SHIFT_NONE;
       xspi_init.TransferRate   = (uint32_t)Init->TransferRate;
 
@@ -268,7 +264,12 @@ int32_t BSP_XSPI_NOR_Init(uint32_t Instance, BSP_XSPI_NOR_Init_t *Init)
     }
   }
 
- (void) (HAL_XSPI_SetClockPrescaler(&hxspi_nor[Instance], 0));
+  if ((ret == BSP_ERROR_NONE) &&
+      (Init->InterfaceMode == BSP_XSPI_NOR_OPI_MODE) &&
+      (Init->TransferRate == BSP_XSPI_NOR_DTR_TRANSFER))
+  {
+    (void) (HAL_XSPI_SetClockPrescaler(&hxspi_nor[Instance], 0));
+  }
 
   /* Return BSP status */
   return ret;
@@ -750,7 +751,23 @@ int32_t BSP_XSPI_NOR_GetInfo(uint32_t Instance, BSP_XSPI_NOR_Info_t *pInfo)
   }
   else
   {
-    (void)MX66UW1G45G_GetFlashInfo(pInfo);
+    if (MX66UW1G45G_GetFlashInfo(pInfo) != MX66UW1G45G_OK)
+    {
+      ret = BSP_ERROR_COMPONENT_FAILURE;
+    }
+    else
+    {
+      /* Override DK default (128MB) with custom-board NOR size. */
+      pInfo->FlashSize           = BSP_XSPI_NOR_FLASH_SIZE_BYTES;
+      pInfo->EraseSectorSize     = MX66UW1G45G_BLOCK_64K;
+      pInfo->EraseSectorsNumber  = (BSP_XSPI_NOR_FLASH_SIZE_BYTES / MX66UW1G45G_BLOCK_64K);
+      pInfo->EraseSubSectorSize  = MX66UW1G45G_BLOCK_4K;
+      pInfo->EraseSubSectorNumber = (BSP_XSPI_NOR_FLASH_SIZE_BYTES / MX66UW1G45G_BLOCK_4K);
+      pInfo->EraseSubSector1Size = MX66UW1G45G_BLOCK_4K;
+      pInfo->EraseSubSector1Number = (BSP_XSPI_NOR_FLASH_SIZE_BYTES / MX66UW1G45G_BLOCK_4K);
+      pInfo->ProgPageSize        = MX66UW1G45G_PAGE_SIZE;
+      pInfo->ProgPagesNumber     = (BSP_XSPI_NOR_FLASH_SIZE_BYTES / MX66UW1G45G_PAGE_SIZE);
+    }
   }
 
   /* Return BSP status */
@@ -773,9 +790,12 @@ int32_t BSP_XSPI_NOR_EnableMemoryMappedMode(uint32_t Instance)
   }
   else
   {
-
-    /* Bypass the Pre-scaler */
-    (void) (HAL_XSPI_SetClockPrescaler(&hxspi_nor[Instance], 0));
+    if ((XSPI_Nor_Ctx[Instance].InterfaceMode == BSP_XSPI_NOR_OPI_MODE) &&
+        (XSPI_Nor_Ctx[Instance].TransferRate == BSP_XSPI_NOR_DTR_TRANSFER))
+    {
+      /* Bypass the Pre-scaler only for high-speed OPI/DTR mode. */
+      (void) (HAL_XSPI_SetClockPrescaler(&hxspi_nor[Instance], 0));
+    }
 
     if (XSPI_Nor_Ctx[Instance].TransferRate == BSP_XSPI_NOR_STR_TRANSFER)
     {
@@ -1152,23 +1172,38 @@ int32_t BSP_XSPI_RAM_Init(uint32_t Instance)
       {
         ret = BSP_ERROR_PERIPH_FAILURE;
       }
-      /* Update current status parameter */
-      XSPI_Ram_Ctx[Instance].IsInitialized = XSPI_ACCESS_INDIRECT;
-      XSPI_Ram_Ctx[Instance].LatencyType   = BSP_XSPI_RAM_FIXED_LATENCY;
-      XSPI_Ram_Ctx[Instance].BurstType     = BSP_XSPI_RAM_LINEAR_BURST;
+      else
+      {
+        /* Update current status parameter */
+        XSPI_Ram_Ctx[Instance].IsInitialized = XSPI_ACCESS_INDIRECT;
+        XSPI_Ram_Ctx[Instance].LatencyType   = BSP_XSPI_RAM_FIXED_LATENCY;
+        XSPI_Ram_Ctx[Instance].BurstType     = BSP_XSPI_RAM_LINEAR_BURST;
+      }
     }
 
-    /* Read Latency=7 up to 200MHz */
-    (void) (APS256XX_WriteReg(&hxspi_ram[Instance], 0, 0x30));
+    if (ret == BSP_ERROR_NONE)
+    {
+#if (BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT == 0U)
+      /* APS256XX-specific register tuning (disable for non-APS HyperRAM). */
+      if (APS256XX_WriteReg(&hxspi_ram[Instance], 0U, 0x30U) != APS256XX_OK) /* Read latency=7 */
+      {
+        ret = BSP_ERROR_COMPONENT_FAILURE;
+      }
+      else if (APS256XX_WriteReg(&hxspi_ram[Instance], 4U, 0x20U) != APS256XX_OK) /* Write latency=7 */
+      {
+        ret = BSP_ERROR_COMPONENT_FAILURE;
+      }
+      else if (APS256XX_WriteReg(&hxspi_ram[Instance], 8U, 0x40U) != APS256XX_OK) /* x16 mode */
+      {
+        ret = BSP_ERROR_COMPONENT_FAILURE;
+      }
+#endif /* (BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT == 0U) */
 
-    /* Write Latency=7 up to 200MHz */
-    (void) (APS256XX_WriteReg(&hxspi_ram[Instance], 4, 0x20));
-
-    /* Switch to x16 mode */
-    (void) (APS256XX_WriteReg(&hxspi_ram[Instance], 8, 0x40));
-
-    /* Bypass the Pre-scaler */
-    (void) (HAL_XSPI_SetClockPrescaler(&hxspi_ram[Instance], 0));
+      if ((ret == BSP_ERROR_NONE) && (HAL_XSPI_SetClockPrescaler(&hxspi_ram[Instance], 0U) != HAL_OK))
+      {
+        ret = BSP_ERROR_PERIPH_FAILURE;
+      }
+    }
 
   }
 
@@ -1366,7 +1401,10 @@ int32_t BSP_XSPI_RAM_Read(uint32_t Instance, uint8_t *pData, uint32_t ReadAddr, 
   }
   else
   {
-    if (APS256XX_Read(&hxspi_ram[Instance], pData, ReadAddr, Size, 7, 1, 0) != APS256XX_OK)
+    if (APS256XX_Read(&hxspi_ram[Instance], pData, ReadAddr, Size,
+                      BSP_XSPI_RAM_READ_LATENCY_CODE,
+                      BSP_XSPI_RAM_IO_MODE,
+                      BSP_XSPI_RAM_BURST_TYPE) != APS256XX_OK)
     {
       ret = BSP_ERROR_PERIPH_FAILURE;
     }
@@ -1395,7 +1433,10 @@ int32_t BSP_XSPI_RAM_Write(uint32_t Instance, uint8_t *pData, uint32_t WriteAddr
   }
   else
   {
-    if (APS256XX_Write(&hxspi_ram[Instance], pData, WriteAddr, Size, 7, 1, 0) != APS256XX_OK)
+    if (APS256XX_Write(&hxspi_ram[Instance], pData, WriteAddr, Size,
+                       BSP_XSPI_RAM_WRITE_LATENCY_CODE,
+                       BSP_XSPI_RAM_IO_MODE,
+                       BSP_XSPI_RAM_BURST_TYPE) != APS256XX_OK)
     {
       ret = BSP_ERROR_PERIPH_FAILURE;
     }
@@ -1421,9 +1462,17 @@ int32_t BSP_XSPI_RAM_EnableMemoryMappedMode(uint32_t Instance)
   }
   else
   {
-    if (APS256XX_EnableMemoryMappedMode(&hxspi_ram[Instance], 7, 7, 1, 0) != APS256XX_OK)
+    if (APS256XX_EnableMemoryMappedMode(&hxspi_ram[Instance],
+                                        BSP_XSPI_RAM_READ_LATENCY_CODE,
+                                        BSP_XSPI_RAM_WRITE_LATENCY_CODE,
+                                        BSP_XSPI_RAM_IO_MODE,
+                                        BSP_XSPI_RAM_BURST_TYPE) != APS256XX_OK)
     {
       ret = BSP_ERROR_PERIPH_FAILURE;
+    }
+    else
+    {
+      XSPI_Ram_Ctx[Instance].IsInitialized = XSPI_ACCESS_MMP;
     }
   }
 
@@ -1533,16 +1582,11 @@ static void XSPI_NOR_MspInit(const XSPI_HandleTypeDef *hxspi)
 
   /* Enable GPIO clocks */
   XSPI_NOR_CLK_GPIO_CLK_ENABLE();
-  XSPI_NOR_DQS_GPIO_CLK_ENABLE();
   XSPI_NOR_CS_GPIO_CLK_ENABLE();
   XSPI_NOR_D0_GPIO_CLK_ENABLE();
   XSPI_NOR_D1_GPIO_CLK_ENABLE();
   XSPI_NOR_D2_GPIO_CLK_ENABLE();
   XSPI_NOR_D3_GPIO_CLK_ENABLE();
-  XSPI_NOR_D4_GPIO_CLK_ENABLE();
-  XSPI_NOR_D5_GPIO_CLK_ENABLE();
-  XSPI_NOR_D6_GPIO_CLK_ENABLE();
-  XSPI_NOR_D7_GPIO_CLK_ENABLE();
 
   /* XSPI CS GPIO pin configuration  */
   GPIO_InitStruct.Pin       = XSPI_NOR_CS_PIN;
@@ -1551,11 +1595,6 @@ static void XSPI_NOR_MspInit(const XSPI_HandleTypeDef *hxspi)
   GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
   GPIO_InitStruct.Alternate = XSPI_NOR_CS_PIN_AF;
   HAL_GPIO_Init(XSPI_NOR_CS_GPIO_PORT, &GPIO_InitStruct);
-
-  /* XSPI DQS GPIO pin configuration  */
-  GPIO_InitStruct.Pin       = XSPI_NOR_DQS_PIN;
-  GPIO_InitStruct.Alternate = XSPI_NOR_DQS_PIN_AF;
-  HAL_GPIO_Init(XSPI_NOR_DQS_GPIO_PORT, &GPIO_InitStruct);
 
   /* XSPI CLK GPIO pin configuration  */
   GPIO_InitStruct.Pin       = XSPI_NOR_CLK_PIN;
@@ -1583,25 +1622,6 @@ static void XSPI_NOR_MspInit(const XSPI_HandleTypeDef *hxspi)
   GPIO_InitStruct.Alternate = XSPI_NOR_D3_PIN_AF;
   HAL_GPIO_Init(XSPI_NOR_D3_GPIO_PORT, &GPIO_InitStruct);
 
-  /* XSPI D4 GPIO pin configuration  */
-  GPIO_InitStruct.Pin       = XSPI_NOR_D4_PIN;
-  GPIO_InitStruct.Alternate = XSPI_NOR_D4_PIN_AF;
-  HAL_GPIO_Init(XSPI_NOR_D4_GPIO_PORT, &GPIO_InitStruct);
-
-  /* XSPI D5 GPIO pin configuration  */
-  GPIO_InitStruct.Pin       = XSPI_NOR_D5_PIN;
-  GPIO_InitStruct.Alternate = XSPI_NOR_D5_PIN_AF;
-  HAL_GPIO_Init(XSPI_NOR_D5_GPIO_PORT, &GPIO_InitStruct);
-
-  /* XSPI D6 GPIO pin configuration  */
-  GPIO_InitStruct.Pin       = XSPI_NOR_D6_PIN;
-  GPIO_InitStruct.Alternate = XSPI_NOR_D6_PIN_AF;
-  HAL_GPIO_Init(XSPI_NOR_D6_GPIO_PORT, &GPIO_InitStruct);
-
-  /* XSPI D7 GPIO pin configuration  */
-  GPIO_InitStruct.Pin       = XSPI_NOR_D7_PIN;
-  GPIO_InitStruct.Alternate = XSPI_NOR_D7_PIN_AF;
-  HAL_GPIO_Init(XSPI_NOR_D7_GPIO_PORT, &GPIO_InitStruct);
 }
 
 /**
@@ -1616,16 +1636,11 @@ static void XSPI_NOR_MspDeInit(const XSPI_HandleTypeDef *hxspi)
 
   /* XSPI GPIO pins de-configuration  */
   HAL_GPIO_DeInit(XSPI_NOR_CLK_GPIO_PORT, XSPI_NOR_CLK_PIN);
-  HAL_GPIO_DeInit(XSPI_NOR_DQS_GPIO_PORT, XSPI_NOR_DQS_PIN);
   HAL_GPIO_DeInit(XSPI_NOR_CS_GPIO_PORT, XSPI_NOR_CS_PIN);
   HAL_GPIO_DeInit(XSPI_NOR_D0_GPIO_PORT, XSPI_NOR_D0_PIN);
   HAL_GPIO_DeInit(XSPI_NOR_D1_GPIO_PORT, XSPI_NOR_D1_PIN);
   HAL_GPIO_DeInit(XSPI_NOR_D2_GPIO_PORT, XSPI_NOR_D2_PIN);
   HAL_GPIO_DeInit(XSPI_NOR_D3_GPIO_PORT, XSPI_NOR_D3_PIN);
-  HAL_GPIO_DeInit(XSPI_NOR_D4_GPIO_PORT, XSPI_NOR_D4_PIN);
-  HAL_GPIO_DeInit(XSPI_NOR_D5_GPIO_PORT, XSPI_NOR_D5_PIN);
-  HAL_GPIO_DeInit(XSPI_NOR_D6_GPIO_PORT, XSPI_NOR_D6_PIN);
-  HAL_GPIO_DeInit(XSPI_NOR_D7_GPIO_PORT, XSPI_NOR_D7_PIN);
 
   /* Reset the XSPI memory interface */
   XSPI_NOR_FORCE_RESET();
@@ -1672,28 +1687,18 @@ static int32_t XSPI_NOR_ResetMemory(uint32_t Instance)
   {
     ret = BSP_ERROR_COMPONENT_FAILURE;
   }
-  else if (MX66UW1G45G_ResetEnable(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
-                                    BSP_XSPI_NOR_STR_TRANSFER) != MX66UW1G45G_OK)
-  {
-    ret = BSP_ERROR_COMPONENT_FAILURE;
-  }
-  else if (MX66UW1G45G_ResetMemory(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
-                                    BSP_XSPI_NOR_STR_TRANSFER) != MX66UW1G45G_OK)
-  {
-    ret = BSP_ERROR_COMPONENT_FAILURE;
-  }
-  else if (MX66UW1G45G_ResetEnable(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
-                                    BSP_XSPI_NOR_DTR_TRANSFER) != MX66UW1G45G_OK)
-  {
-    ret = BSP_ERROR_COMPONENT_FAILURE;
-  }
-  else if (MX66UW1G45G_ResetMemory(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
-                                    BSP_XSPI_NOR_DTR_TRANSFER) != MX66UW1G45G_OK)
-  {
-    ret = BSP_ERROR_COMPONENT_FAILURE;
-  }
   else
   {
+    /* Optional resets for boards supporting OPI: keep best-effort only. */
+    (void) MX66UW1G45G_ResetEnable(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
+                                   BSP_XSPI_NOR_STR_TRANSFER);
+    (void) MX66UW1G45G_ResetMemory(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
+                                   BSP_XSPI_NOR_STR_TRANSFER);
+    (void) MX66UW1G45G_ResetEnable(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
+                                   BSP_XSPI_NOR_DTR_TRANSFER);
+    (void) MX66UW1G45G_ResetMemory(&hxspi_nor[Instance], BSP_XSPI_NOR_OPI_MODE,
+                                   BSP_XSPI_NOR_DTR_TRANSFER);
+
     XSPI_Nor_Ctx[Instance].IsInitialized = XSPI_ACCESS_INDIRECT;     /* After reset S/W setting to indirect access  */
     XSPI_Nor_Ctx[Instance].InterfaceMode = BSP_XSPI_NOR_SPI_MODE;    /* After reset H/W back to SPI mode by default */
     XSPI_Nor_Ctx[Instance].TransferRate  = BSP_XSPI_NOR_STR_TRANSFER; /* After reset S/W setting to STR mode        */
@@ -1953,6 +1958,7 @@ static void XSPI_RAM_MspInit(const XSPI_HandleTypeDef *hxspi)
 
   /* Enable GPIO clocks */
   XSPI_RAM_CLK_GPIO_CLK_ENABLE();
+  XSPI_RAM_CLK_N_GPIO_CLK_ENABLE();
   XSPI_RAM_DQS_GPIO_CLK_ENABLE();
   XSPI_RAM_CS_GPIO_CLK_ENABLE();
   XSPI_RAM_D0_GPIO_CLK_ENABLE();
@@ -1989,6 +1995,12 @@ static void XSPI_RAM_MspInit(const XSPI_HandleTypeDef *hxspi)
   GPIO_InitStruct.Pull      = GPIO_PULLUP;
   GPIO_InitStruct.Alternate = XSPI_RAM_CLK_PIN_AF;
   HAL_GPIO_Init(XSPI_RAM_CLK_GPIO_PORT, &GPIO_InitStruct);
+
+  /* XSPI CLK_N GPIO pin configuration  */
+  GPIO_InitStruct.Pin       = XSPI_RAM_CLK_N_PIN;
+  GPIO_InitStruct.Pull      = GPIO_PULLUP;
+  GPIO_InitStruct.Alternate = XSPI_RAM_CLK_N_PIN_AF;
+  HAL_GPIO_Init(XSPI_RAM_CLK_N_GPIO_PORT, &GPIO_InitStruct);
 
   /* XSPI D0 GPIO pin configuration  */
   GPIO_InitStruct.Pin       = XSPI_RAM_D0_PIN;
@@ -2084,6 +2096,7 @@ static void XSPI_RAM_MspDeInit(const XSPI_HandleTypeDef *hxspi)
 
   /* XSPI GPIO pins de-configuration  */
   HAL_GPIO_DeInit(XSPI_RAM_CLK_GPIO_PORT, XSPI_RAM_CLK_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_CLK_N_GPIO_PORT, XSPI_RAM_CLK_N_PIN);
   HAL_GPIO_DeInit(XSPI_RAM_DQS0_GPIO_PORT, XSPI_RAM_DQS0_PIN);
   HAL_GPIO_DeInit(XSPI_RAM_DQS1_GPIO_PORT, XSPI_RAM_DQS1_PIN);
   HAL_GPIO_DeInit(XSPI_RAM_CS_GPIO_PORT, XSPI_RAM_CS_PIN);
@@ -2095,6 +2108,14 @@ static void XSPI_RAM_MspDeInit(const XSPI_HandleTypeDef *hxspi)
   HAL_GPIO_DeInit(XSPI_RAM_D5_GPIO_PORT, XSPI_RAM_D5_PIN);
   HAL_GPIO_DeInit(XSPI_RAM_D6_GPIO_PORT, XSPI_RAM_D6_PIN);
   HAL_GPIO_DeInit(XSPI_RAM_D7_GPIO_PORT, XSPI_RAM_D7_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D8_GPIO_PORT, XSPI_RAM_D8_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D9_GPIO_PORT, XSPI_RAM_D9_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D10_GPIO_PORT, XSPI_RAM_D10_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D11_GPIO_PORT, XSPI_RAM_D11_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D12_GPIO_PORT, XSPI_RAM_D12_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D13_GPIO_PORT, XSPI_RAM_D13_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D14_GPIO_PORT, XSPI_RAM_D14_PIN);
+  HAL_GPIO_DeInit(XSPI_RAM_D15_GPIO_PORT, XSPI_RAM_D15_PIN);
 
   /* Reset the XSPI memory interface */
   XSPI_RAM_FORCE_RESET();
@@ -2123,4 +2144,3 @@ static void XSPI_RAM_MspDeInit(const XSPI_HandleTypeDef *hxspi)
 /**
   * @}
   */
-

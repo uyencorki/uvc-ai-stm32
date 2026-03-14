@@ -64,6 +64,13 @@
 #ifndef CMW_CAMERA_DVP_INTERFACE
 #define CMW_CAMERA_DVP_INTERFACE DCMIPP_INTERFACE_8BITS
 #endif
+#ifndef CMW_CAMERA_DVP_SWAPCYCLES
+#if APP_DVP_SWAPCYCLES_ENABLE
+#define CMW_CAMERA_DVP_SWAPCYCLES DCMIPP_SWAPCYCLES_ENABLE
+#else
+#define CMW_CAMERA_DVP_SWAPCYCLES DCMIPP_SWAPCYCLES_DISABLE
+#endif
+#endif
 
 typedef struct
 {
@@ -852,6 +859,8 @@ void HAL_DCMIPP_PIPE_FrameEventCallback(DCMIPP_HandleTypeDef *hdcmipp, uint32_t 
   */
 void HAL_DCMIPP_MspInit(DCMIPP_HandleTypeDef *hdcmipp)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
   UNUSED(hdcmipp);
 
   /*** Enable peripheral clock ***/
@@ -861,11 +870,44 @@ void HAL_DCMIPP_MspInit(DCMIPP_HandleTypeDef *hdcmipp)
   __HAL_RCC_DCMIPP_FORCE_RESET();
   __HAL_RCC_DCMIPP_RELEASE_RESET();
 
+  /* Configure DVP GPIOs on N6 similarly to CubeMX MSP style. */
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPION_CLK_ENABLE();
+
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF9_DCMIPP;
+
+  /* PB6/PB7/PB8/PB9 => D6/D7/VSYNC/D3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* PC6 => D1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* PE0/PE8 => D2/D4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_8;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+  /* PN9 => D5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  HAL_GPIO_Init(GPION, &GPIO_InitStruct);
+
+  /* PD0/PD5/PD7 => HSYNC/PIXCLK/D0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_5 | GPIO_PIN_7;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
   /*** Configure the NVIC for DCMIPP ***/
   /* NVIC configuration for DCMIPP transfer complete interrupt */
-  HAL_NVIC_SetPriority(DCMIPP_IRQn, 0x07, 0);
+  HAL_NVIC_SetPriority(DCMIPP_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DCMIPP_IRQn);
 
+#if !CMW_CAMERA_USE_DVP
   /*** Enable peripheral clock ***/
   /* Enable CSI clock */
   __HAL_RCC_CSI_CLK_ENABLE();
@@ -877,6 +919,7 @@ void HAL_DCMIPP_MspInit(DCMIPP_HandleTypeDef *hdcmipp)
   /* NVIC configuration for CSI transfer complete interrupt */
   HAL_NVIC_SetPriority(CSI_IRQn, 0x07, 0);
   HAL_NVIC_EnableIRQ(CSI_IRQn);
+#endif
 
 }
 
@@ -889,6 +932,12 @@ void HAL_DCMIPP_MspDeInit(DCMIPP_HandleTypeDef *hdcmipp)
 {
   UNUSED(hdcmipp);
 
+  HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9);
+  HAL_GPIO_DeInit(GPIOC, GPIO_PIN_6);
+  HAL_GPIO_DeInit(GPIOE, GPIO_PIN_0 | GPIO_PIN_8);
+  HAL_GPIO_DeInit(GPION, GPIO_PIN_9);
+  HAL_GPIO_DeInit(GPIOD, GPIO_PIN_0 | GPIO_PIN_5 | GPIO_PIN_7);
+
   __HAL_RCC_DCMIPP_FORCE_RESET();
   __HAL_RCC_DCMIPP_RELEASE_RESET();
 
@@ -898,14 +947,16 @@ void HAL_DCMIPP_MspDeInit(DCMIPP_HandleTypeDef *hdcmipp)
   /* Disable DCMIPP clock */
   __HAL_RCC_DCMIPP_CLK_DISABLE();
 
+#if !CMW_CAMERA_USE_DVP
   __HAL_RCC_CSI_FORCE_RESET();
   __HAL_RCC_CSI_RELEASE_RESET();
 
-  /* Disable NVIC  for DCMIPP transfer complete interrupt */
+  /* Disable NVIC for CSI transfer complete interrupt */
   HAL_NVIC_DisableIRQ(CSI_IRQn);
 
-  /* Disable DCMIPP clock */
+  /* Disable CSI clock */
   __HAL_RCC_CSI_CLK_DISABLE();
+#endif
 }
 
 /**
@@ -1060,7 +1111,7 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
   parallel_conf.ExtendedDataMode = CMW_CAMERA_DVP_INTERFACE;
   parallel_conf.SynchroMode = DCMIPP_SYNCHRO_HARDWARE;
   parallel_conf.SwapBits = DCMIPP_SWAPBITS_DISABLE;
-  parallel_conf.SwapCycles = DCMIPP_SWAPCYCLES_DISABLE;
+  parallel_conf.SwapCycles = CMW_CAMERA_DVP_SWAPCYCLES;
 
     printf("[CMW][DVP-TEST] case=%lu VSYNC=%s HSYNC=%s PIXCLK=%s-edge\r\n",
       (unsigned long)(test_case_idx + 1U),

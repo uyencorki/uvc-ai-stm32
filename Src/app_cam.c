@@ -507,9 +507,7 @@ int CAM_GetVencHeight()
 
 void CMW_CAMERA_PIPE_ErrorCallback(uint32_t pipe)
 {
-  printf("[CAM][ERR] DCMIPP pipe error pipe=%lu state=%lu\r\n",
-         (unsigned long)pipe,
-         (unsigned long)HAL_DCMIPP_PIPE_GetState(CMW_CAMERA_GetDCMIPPHandle(), pipe));
+  /* Avoid printf in ISR callback path; report via deferred health log. */
   APP_CAM_DebugOnPipeError(pipe);
   /* FIXME : Need to tune sensor/ipplug so we can remove this implementation */
 }

@@ -359,6 +359,10 @@ static void app_dump_pipe1_first_bytes_once(void)
 
 static void app_log_cam_health_1s(void)
 {
+  DCMIPP_HandleTypeDef *hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
+  uint32_t pipe1_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE1);
+  uint32_t pipe2_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE2);
+  uint32_t dcmipp_err = HAL_DCMIPP_GetError(hdcmipp);
   uint32_t now_ms = HAL_GetTick();
 
   if ((now_ms - g_cam_health_last_ms) < 1000U)
@@ -366,7 +370,7 @@ static void app_log_cam_health_1s(void)
     return;
   }
 
-    printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu)\r\n",
+    printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu) st=(%lu,%lu) herr=0x%08lX\r\n",
          (unsigned long)(g_pipe1_frame_irq_count - g_cam_health_last_pipe1_frame),
          (unsigned long)(g_pipe2_frame_irq_count - g_cam_health_last_pipe2_frame),
          (unsigned long)(g_pipe1_vsync_irq_count - g_cam_health_last_pipe1_vsync),
@@ -377,7 +381,10 @@ static void app_log_cam_health_1s(void)
          (unsigned long)(g_pipe_error_irq_count[2] - g_cam_health_last_pipe_err[2]),
          (unsigned long)g_pipe_error_irq_count[0],
          (unsigned long)g_pipe_error_irq_count[1],
-         (unsigned long)g_pipe_error_irq_count[2]);
+         (unsigned long)g_pipe_error_irq_count[2],
+         (unsigned long)pipe1_state,
+         (unsigned long)pipe2_state,
+         (unsigned long)dcmipp_err);
 
   g_cam_health_last_ms = now_ms;
   g_cam_health_last_pipe1_frame = g_pipe1_frame_irq_count;
@@ -1055,13 +1062,11 @@ static void isp_thread_fct(void *arg)
 static void app_uvc_streaming_active(struct uvcl_callbacks *cbs, UVCL_StreamConf_t stream)
 {
   uvc_is_active = 1;
-  BSP_LED_On(LED_RED);
 }
 
 static void app_uvc_streaming_inactive(struct uvcl_callbacks *cbs)
 {
   uvc_is_active = 0;
-  BSP_LED_Off(LED_RED);
 }
 
 static void app_uvc_frame_release(struct uvcl_callbacks *cbs, void *frame)
@@ -1194,7 +1199,6 @@ void app_run()
                           &isp_thread);
   assert(hdl != NULL);
 
-  BSP_LED_On(LED_GREEN);
 }
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
@@ -1202,10 +1206,26 @@ int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
   /* Keep ISR callback minimal to avoid capture instability during bring-up. */
   if (pipe == DCMIPP_PIPE1)
   {
+    g_pipe1_frame_irq_count++;
+    if (g_pipe1_first_frame_logged == 0)
+    {
+      g_pipe1_first_frame_logged = 1;
+      g_pipe1_first_frame_pending_log = 1;
+      g_pipe1_snapshot_idx = capture_buffer_capt_idx;
+      g_pipe1_snapshot_pending = 1;
+    }
     (void)app_main_pipe_frame_event();
   }
   else if (pipe == DCMIPP_PIPE2)
+  {
+    g_pipe2_frame_irq_count++;
+    if (g_pipe2_first_frame_logged == 0)
+    {
+      g_pipe2_first_frame_logged = 1;
+      g_pipe2_first_frame_pending_log = 1;
+    }
     app_ancillary_pipe_frame_event();
+  }
 
   return HAL_OK;
 }

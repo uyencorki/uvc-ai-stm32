@@ -16,7 +16,7 @@ MEMORY
 {
   AXISRAM1_2_S (xrw)        : ORIGIN = 0x34000400, LENGTH = 1727K
   AXI_SRAM_UNCACHED (xrw)   : ORIGIN = 0x341b0000, LENGTH = 320K
-  PSRAM (xrw)               : ORIGIN = 0x91000000, LENGTH = 16M
+  PSRAM (xrw)               : ORIGIN = 0x91000000, LENGTH = 32M
 }
 
 /* Sections */

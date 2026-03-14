@@ -35,7 +35,7 @@
 #define CAPTURE_DELAY 1
 
 /* Bring-up mode for new DVP sensors: run only PIPE1 first, then re-enable NN/PIPE2 later. */
-#define APP_DVP_BRINGUP_PIPE1_ONLY 0
+#define APP_DVP_BRINGUP_PIPE1_ONLY 1
 
 /* DVP timing test selector (1..8), then rebuild and retest.
  * bit2: VSYNC polarity (0=active low, 1=active high)
@@ -43,7 +43,11 @@
  * bit0: PCLK edge      (0=falling,    1=rising)
  * Example: case=2 -> 001b => VSYNC low, HSYNC low, PCLK rising.
  */
-#define APP_DVP_TEST_CASE 3
+/* ContinuousMode-like baseline: VSYNC high, HSYNC high, PIXCLK rising. */
+#define APP_DVP_TEST_CASE 8
+
+/* Keep sensor format as YUV422 but mimic example timing behavior. */
+#define APP_DVP_SWAPCYCLES_ENABLE 1
 
 #define APP_DVP_VSYNC_ACTIVE_HIGH   (((APP_DVP_TEST_CASE) - 1) >> 2 & 0x1)
 #define APP_DVP_HSYNC_ACTIVE_HIGH   (((APP_DVP_TEST_CASE) - 1) >> 1 & 0x1)
