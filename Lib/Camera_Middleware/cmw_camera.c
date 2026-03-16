@@ -878,7 +878,7 @@ void HAL_DCMIPP_MspInit(DCMIPP_HandleTypeDef *hdcmipp)
   __HAL_RCC_GPION_CLK_ENABLE();
 
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   GPIO_InitStruct.Alternate = GPIO_AF9_DCMIPP;
 

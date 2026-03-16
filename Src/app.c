@@ -234,6 +234,9 @@ static uint32_t g_cam_health_last_pipe1_vsync;
 static uint32_t g_cam_health_last_pipe_err[3];
 static uint32_t g_pipe1_rearm_ok_count;
 static uint32_t g_pipe1_rearm_fail_count;
+static uint32_t g_pipe1_last_frame_hash;
+static uint32_t g_pipe1_last_head_hash;
+static uint32_t g_pipe1_stable_seconds;
 static int g_pipe1_first_frame_pending_log;
 static int g_pipe2_first_frame_pending_log;
 static int g_pipe1_first_vsync_pending_log;
@@ -257,6 +260,8 @@ static volatile int g_pipe1_snapshot_idx;
 static uint8_t capture_buffer[CAPTURE_BUFFER_NB][VENC_MAX_WIDTH * VENC_MAX_HEIGHT * CAPTURE_BPP];
 static int capture_buffer_disp_idx;
 static int is_cache_enable(void);
+static uint32_t app_frame_sample_hash(const uint8_t *fb, uint32_t frame_bytes);
+static void app_log_pipe1_data_1s(uint32_t frame_delta);
 
 static void app_capture_pipe1_snapshot_once(uint8_t *src)
 {
@@ -357,6 +362,116 @@ static void app_dump_pipe1_first_bytes_once(void)
   g_pipe1_first_dump_done = 1;
 }
 
+static uint32_t app_frame_sample_hash(const uint8_t *fb, uint32_t frame_bytes)
+{
+  uint32_t hash = 2166136261UL;
+  uint32_t step;
+  uint32_t idx;
+  uint32_t i;
+
+  if ((fb == NULL) || (frame_bytes < 1024U))
+  {
+    return 0U;
+  }
+
+  step = frame_bytes / 257U;
+  if (step == 0U)
+  {
+    step = 1U;
+  }
+
+  for (i = 0U; i < 257U; i++)
+  {
+    idx = (i * step) % frame_bytes;
+    hash ^= fb[idx];
+    hash *= 16777619UL;
+  }
+
+  return hash;
+}
+
+static void app_log_pipe1_data_1s(uint32_t frame_delta)
+{
+  uint8_t *fb;
+  uint8_t *fb_mid;
+  uint8_t *fb_tail;
+  uint32_t frame_bytes;
+  uint32_t frame_hash;
+  uint32_t head_hash;
+  uint32_t sum_head64 = 0U;
+  uint32_t sum_mid64 = 0U;
+  uint32_t sum_tail64 = 0U;
+  uint32_t sum_head1k = 0U;
+  int idx;
+  uint32_t i;
+
+  if (frame_delta == 0U)
+  {
+    return;
+  }
+
+  idx = capture_buffer_disp_idx;
+  if ((idx < 0) || (idx >= CAPTURE_BUFFER_NB))
+  {
+    return;
+  }
+
+  fb = capture_buffer[idx];
+  frame_bytes = (uint32_t)VENC_WIDTH * (uint32_t)VENC_HEIGHT * (uint32_t)CAPTURE_BPP;
+  if (frame_bytes < 1024U)
+  {
+    return;
+  }
+
+  CACHE_OP(SCB_InvalidateDCache_by_Addr((void *)fb, frame_bytes));
+  fb_mid = fb + (frame_bytes / 2U);
+  fb_tail = fb + (frame_bytes - 64U);
+
+  for (i = 0U; i < 64U; i++)
+  {
+    sum_head64 += fb[i];
+    sum_mid64 += fb_mid[i];
+    sum_tail64 += fb_tail[i];
+  }
+  for (i = 0U; i < 1024U; i++)
+  {
+    sum_head1k += fb[i];
+  }
+
+  frame_hash = app_frame_sample_hash(fb, frame_bytes);
+  head_hash = (sum_head64 << 16) ^ (sum_head1k & 0xFFFFU);
+  if ((frame_hash == g_pipe1_last_frame_hash) && (head_hash == g_pipe1_last_head_hash))
+  {
+    g_pipe1_stable_seconds++;
+  }
+  else
+  {
+    g_pipe1_stable_seconds = 0U;
+  }
+
+  printf("[CAM][DATA][HEAD] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X | sum64=%lu sum1k=%lu\r\n",
+         fb[0], fb[1], fb[2], fb[3], fb[4], fb[5], fb[6], fb[7],
+         fb[8], fb[9], fb[10], fb[11], fb[12], fb[13], fb[14], fb[15],
+         (unsigned long)sum_head64, (unsigned long)sum_head1k);
+  printf("[CAM][DATA][MID ] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X | sum64=%lu\r\n",
+         fb_mid[0], fb_mid[1], fb_mid[2], fb_mid[3], fb_mid[4], fb_mid[5], fb_mid[6], fb_mid[7],
+         fb_mid[8], fb_mid[9], fb_mid[10], fb_mid[11], fb_mid[12], fb_mid[13], fb_mid[14], fb_mid[15],
+         (unsigned long)sum_mid64);
+  printf("[CAM][DATA][TAIL] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X | sum64=%lu\r\n",
+         fb_tail[0], fb_tail[1], fb_tail[2], fb_tail[3], fb_tail[4], fb_tail[5], fb_tail[6], fb_tail[7],
+         fb_tail[8], fb_tail[9], fb_tail[10], fb_tail[11], fb_tail[12], fb_tail[13], fb_tail[14], fb_tail[15],
+         (unsigned long)sum_tail64);
+  printf("[CAM][FREEZE] frame_hash=0x%08lX stable_s=%lu %s idx=%d addr=0x%08lX\r\n",
+         (unsigned long)frame_hash,
+         (unsigned long)g_pipe1_stable_seconds,
+         (g_pipe1_stable_seconds >= 3U) ? "POSSIBLE_FROZEN" : "OK",
+         idx,
+         (unsigned long)fb);
+
+  g_pipe1_last_frame_hash = frame_hash;
+  g_pipe1_last_head_hash = head_hash;
+}
+
 static void app_log_cam_health_1s(void)
 {
   DCMIPP_HandleTypeDef *hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
@@ -364,14 +479,16 @@ static void app_log_cam_health_1s(void)
   uint32_t pipe2_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE2);
   uint32_t dcmipp_err = HAL_DCMIPP_GetError(hdcmipp);
   uint32_t now_ms = HAL_GetTick();
+  uint32_t pipe1_frame_delta;
 
   if ((now_ms - g_cam_health_last_ms) < 1000U)
   {
     return;
   }
 
+    pipe1_frame_delta = g_pipe1_frame_irq_count - g_cam_health_last_pipe1_frame;
     printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu) st=(%lu,%lu) herr=0x%08lX\r\n",
-         (unsigned long)(g_pipe1_frame_irq_count - g_cam_health_last_pipe1_frame),
+         (unsigned long)pipe1_frame_delta,
          (unsigned long)(g_pipe2_frame_irq_count - g_cam_health_last_pipe2_frame),
          (unsigned long)(g_pipe1_vsync_irq_count - g_cam_health_last_pipe1_vsync),
       (unsigned long)g_pipe1_rearm_ok_count,
@@ -385,6 +502,7 @@ static void app_log_cam_health_1s(void)
          (unsigned long)pipe1_state,
          (unsigned long)pipe2_state,
          (unsigned long)dcmipp_err);
+    app_log_pipe1_data_1s(pipe1_frame_delta);
 
   g_cam_health_last_ms = now_ms;
   g_cam_health_last_pipe1_frame = g_pipe1_frame_irq_count;
