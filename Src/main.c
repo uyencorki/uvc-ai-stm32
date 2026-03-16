@@ -78,7 +78,7 @@ int main(void)
   CONSOLE_Config();
 
 
-  /* DCMIPP GPIOs are now configured in HAL_DCMIPP_MspInit(). */
+  BOARD_Pins_Init_DCMIPP();
 
   Setup_Mpu();
 
@@ -160,7 +160,6 @@ static void Security_Config()
 
   HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_NPU , RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
   HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_DMA2D , RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
-  HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_CSI    , RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
   HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_DCMIPP , RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
   HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_VENC , RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
   HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_OTG1HS , RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
@@ -339,6 +338,7 @@ static void main_thread_fct(void *arg)
   uint32_t preemptPriority;
   uint32_t subPriority;
   IRQn_Type i;
+  int ret;
 
   /* Copy SysTick_IRQn priority set by RTOS and use it as default priorities for IRQs. We are now sure that all irqs
    * have default priority below or equal to configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY.
@@ -365,87 +365,20 @@ static void main_thread_fct(void *arg)
   NPUCache_config();
 
   /*** External RAM and NOR Flash *********************************************/
-  {
-    int32_t xspi_ret;
-    uint8_t ram_id[6] = {0};
-    uint8_t nor_id[3] = {0};
+  BSP_XSPI_RAM_Init(0);
+  BSP_XSPI_RAM_EnableMemoryMappedMode(0);
 
-    xspi_ret = BSP_XSPI_RAM_Init(0);
-    if (xspi_ret != BSP_ERROR_NONE)
-    {
-      printf("[XSPI][ERR] RAM init failed ret=%ld\r\n", (long)xspi_ret);
-      assert(0);
-    }
-    else
-    {
-      printf("[XSPI] RAM init OK (RLat=%lu WLat=%lu IO=%lu Burst=%lu)\r\n",
-             (unsigned long)BSP_XSPI_RAM_READ_LATENCY_CODE,
-             (unsigned long)BSP_XSPI_RAM_WRITE_LATENCY_CODE,
-             (unsigned long)BSP_XSPI_RAM_IO_MODE,
-             (unsigned long)BSP_XSPI_RAM_BURST_TYPE);
-    }
+  BSP_XSPI_NOR_Init_t NOR_Init;
+  NOR_Init.InterfaceMode = BSP_XSPI_NOR_OPI_MODE;
+  NOR_Init.TransferRate = BSP_XSPI_NOR_DTR_TRANSFER;
+  BSP_XSPI_NOR_Init(0, &NOR_Init);
+  BSP_XSPI_NOR_EnableMemoryMappedMode(0);
 
-    xspi_ret = BSP_XSPI_RAM_ReadID(0, ram_id);
-    if (xspi_ret == BSP_ERROR_NONE)
-    {
-      printf("[XSPI] RAM ID: %02X %02X %02X %02X %02X %02X\r\n",
-             ram_id[0], ram_id[1], ram_id[2], ram_id[3], ram_id[4], ram_id[5]);
-    }
-    else
-    {
-      printf("[XSPI][WARN] RAM ReadID failed ret=%ld (some HyperRAMs do not support APS ID cmd)\r\n",
-             (long)xspi_ret);
-    }
+  ret = BSP_LED_Init(LED_GREEN);
+  assert(ret == BSP_ERROR_NONE);
 
-    xspi_ret = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
-    if (xspi_ret != BSP_ERROR_NONE)
-    {
-      printf("[XSPI][ERR] RAM memory-mapped enable failed ret=%ld\r\n", (long)xspi_ret);
-      assert(0);
-    }
-    else
-    {
-      printf("[XSPI] RAM memory-mapped ON\r\n");
-    }
-
-    BSP_XSPI_NOR_Init_t NOR_Init;
-    /* Custom board wiring uses NOR in 4-line SPI (IO0..IO3) only. */
-    NOR_Init.InterfaceMode = BSP_XSPI_NOR_SPI_MODE;
-    NOR_Init.TransferRate = BSP_XSPI_NOR_STR_TRANSFER;
-
-    xspi_ret = BSP_XSPI_NOR_Init(0, &NOR_Init);
-    if (xspi_ret != BSP_ERROR_NONE)
-    {
-      printf("[XSPI][ERR] NOR init failed ret=%ld\r\n", (long)xspi_ret);
-      assert(0);
-    }
-    else
-    {
-      printf("[XSPI] NOR init OK (SPI/STR size=%lu bytes)\r\n",
-             (unsigned long)BSP_XSPI_NOR_FLASH_SIZE_BYTES);
-    }
-
-    xspi_ret = BSP_XSPI_NOR_ReadID(0, nor_id);
-    if (xspi_ret == BSP_ERROR_NONE)
-    {
-      printf("[XSPI] NOR ID: %02X %02X %02X\r\n", nor_id[0], nor_id[1], nor_id[2]);
-    }
-    else
-    {
-      printf("[XSPI][WARN] NOR ReadID failed ret=%ld\r\n", (long)xspi_ret);
-    }
-
-    xspi_ret = BSP_XSPI_NOR_EnableMemoryMappedMode(0);
-    if (xspi_ret != BSP_ERROR_NONE)
-    {
-      printf("[XSPI][ERR] NOR memory-mapped enable failed ret=%ld\r\n", (long)xspi_ret);
-      assert(0);
-    }
-    else
-    {
-      printf("[XSPI] NOR memory-mapped ON\r\n");
-    }
-  }
+  ret = BSP_LED_Init(LED_RED);
+  assert(ret == BSP_ERROR_NONE);
 
   /* Set all required IPs as secure privileged */
   Security_Config();
@@ -482,15 +415,9 @@ HAL_StatusTypeDef MX_DCMIPP_ClockConfig(DCMIPP_HandleTypeDef *hdcmipp)
 
   RCC_PeriphCLKInitStruct.PeriphClockSelection = RCC_PERIPHCLK_DCMIPP;
   RCC_PeriphCLKInitStruct.DcmippClockSelection = RCC_DCMIPPCLKSOURCE_IC17;
-  RCC_PeriphCLKInitStruct.ICSelection[RCC_IC17].ClockSelection = RCC_ICCLKSOURCE_PLL2;
-  RCC_PeriphCLKInitStruct.ICSelection[RCC_IC17].ClockDivider = 3;
-  ret = HAL_RCCEx_PeriphCLKConfig(&RCC_PeriphCLKInitStruct);
-  if (ret)
-    return ret;
-
-  RCC_PeriphCLKInitStruct.PeriphClockSelection = RCC_PERIPHCLK_CSI;
-  RCC_PeriphCLKInitStruct.ICSelection[RCC_IC18].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_PeriphCLKInitStruct.ICSelection[RCC_IC18].ClockDivider = 40;
+  /* Align DCMIPP clock setup with DCMIPP_ContinuousMode reference (IC17 <- PLL1/4). */
+  RCC_PeriphCLKInitStruct.ICSelection[RCC_IC17].ClockSelection = RCC_ICCLKSOURCE_PLL1;
+  RCC_PeriphCLKInitStruct.ICSelection[RCC_IC17].ClockDivider = 4;
   ret = HAL_RCCEx_PeriphCLKConfig(&RCC_PeriphCLKInitStruct);
   if (ret)
     return ret;

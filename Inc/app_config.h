@@ -43,11 +43,7 @@
  * bit0: PCLK edge      (0=falling,    1=rising)
  * Example: case=2 -> 001b => VSYNC low, HSYNC low, PCLK rising.
  */
-/* ContinuousMode-like baseline: VSYNC high, HSYNC high, PIXCLK rising. */
-#define APP_DVP_TEST_CASE 8
-
-/* Keep sensor format as YUV422 but mimic example timing behavior. */
-#define APP_DVP_SWAPCYCLES_ENABLE 1
+#define APP_DVP_TEST_CASE 1
 
 #define APP_DVP_VSYNC_ACTIVE_HIGH   (((APP_DVP_TEST_CASE) - 1) >> 2 & 0x1)
 #define APP_DVP_HSYNC_ACTIVE_HIGH   (((APP_DVP_TEST_CASE) - 1) >> 1 & 0x1)

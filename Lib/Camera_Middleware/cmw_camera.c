@@ -31,45 +31,14 @@
 #include <stdio.h>
 #include "assert.h"
 
-/* Switch capture interface to DVP without removing existing CSI flow. */
-#ifndef CMW_CAMERA_USE_DVP
-#define CMW_CAMERA_USE_DVP 1
+#ifndef APP_DVP_CASE_MIN
+#define APP_DVP_CASE_MIN 1U
 #endif
-
-/* Default DVP input settings; adjust once sensor timing/polarity is known. */
-#ifndef CMW_CAMERA_DVP_FORMAT
-#define CMW_CAMERA_DVP_FORMAT DCMIPP_FORMAT_YUV422
+#ifndef APP_DVP_CASE_MAX
+#define APP_DVP_CASE_MAX 8U
 #endif
-#ifndef CMW_CAMERA_DVP_VSPOLARITY
-#if APP_DVP_VSYNC_ACTIVE_HIGH
-#define CMW_CAMERA_DVP_VSPOLARITY DCMIPP_VSPOLARITY_HIGH
-#else
-#define CMW_CAMERA_DVP_VSPOLARITY DCMIPP_VSPOLARITY_LOW
-#endif
-#endif
-#ifndef CMW_CAMERA_DVP_HSPOLARITY
-#if APP_DVP_HSYNC_ACTIVE_HIGH
-#define CMW_CAMERA_DVP_HSPOLARITY DCMIPP_HSPOLARITY_HIGH
-#else
-#define CMW_CAMERA_DVP_HSPOLARITY DCMIPP_HSPOLARITY_LOW
-#endif
-#endif
-#ifndef CMW_CAMERA_DVP_PCKPOLARITY
-#if APP_DVP_PIXCLK_RISING_EDGE
-#define CMW_CAMERA_DVP_PCKPOLARITY DCMIPP_PCKPOLARITY_RISING
-#else
-#define CMW_CAMERA_DVP_PCKPOLARITY DCMIPP_PCKPOLARITY_FALLING
-#endif
-#endif
-#ifndef CMW_CAMERA_DVP_INTERFACE
-#define CMW_CAMERA_DVP_INTERFACE DCMIPP_INTERFACE_8BITS
-#endif
-#ifndef CMW_CAMERA_DVP_SWAPCYCLES
-#if APP_DVP_SWAPCYCLES_ENABLE
-#define CMW_CAMERA_DVP_SWAPCYCLES DCMIPP_SWAPCYCLES_ENABLE
-#else
-#define CMW_CAMERA_DVP_SWAPCYCLES DCMIPP_SWAPCYCLES_DISABLE
-#endif
+#ifndef APP_DVP_TEST_CASE
+#define APP_DVP_TEST_CASE 1U
 #endif
 
 typedef struct
@@ -109,6 +78,9 @@ static void CMW_CAMERA_EnableGPIOs(void);
 static void CMW_CAMERA_PwrDown(void);
 static int32_t CMW_CAMERA_SetPipe(DCMIPP_HandleTypeDef *hdcmipp, uint32_t pipe, CMW_DCMIPP_Conf_t *p_conf, uint32_t *pitch);
 static int CMW_CAMERA_Probe_Sensor(CMW_Sensor_Init_t *initValues, CMW_Sensor_Name_t *sensorName);
+static uint32_t CMW_CAMERA_ClampDvpCase(uint32_t case_id);
+static void CMW_CAMERA_GetDvpCasePolarityFlags(uint32_t case_id, uint32_t *vs_high, uint32_t *hs_high, uint32_t *pck_rising);
+static void CMW_CAMERA_FillParallelConfigByCase(DCMIPP_ParallelConfTypeDef *parallel_conf, uint32_t case_id);
 
 DCMIPP_HandleTypeDef* CMW_CAMERA_GetDCMIPPHandle(void)
 {
@@ -363,13 +335,8 @@ int32_t CMW_CAMERA_Start(uint32_t pipe, uint8_t *pbuff, uint32_t mode)
     return CMW_ERROR_WRONG_PARAM;
   }
 
-#if CMW_CAMERA_USE_DVP
-  /* DVP path: start capture from parallel input (no CSI VC). */
+  /* DVP path: start capture from parallel input. */
   ret = HAL_DCMIPP_PIPE_Start(&hcamera_dcmipp, pipe, (uint32_t)pbuff, mode);
-#else
-  /* CSI path: keep legacy behavior for fallback/testing. */
-  ret = HAL_DCMIPP_CSI_PIPE_Start(&hcamera_dcmipp, pipe, DCMIPP_VIRTUAL_CHANNEL0, (uint32_t)pbuff, mode);
-#endif
   if (ret != HAL_OK)
   {
     printf("[CMW] start pipe=%lu HAL error=%ld\r\n", (unsigned long)pipe, (long)ret);
@@ -413,13 +380,8 @@ int32_t CMW_CAMERA_DoubleBufferStart(uint32_t pipe, uint8_t *pbuff1, uint8_t *pb
     return CMW_ERROR_WRONG_PARAM;
   }
 
-#if CMW_CAMERA_USE_DVP
   /* DVP path: double buffer start from parallel input. */
   if (HAL_DCMIPP_PIPE_DoubleBufferStart(&hcamera_dcmipp, pipe, (uint32_t)pbuff1, (uint32_t)pbuff2, Mode) != HAL_OK)
-#else
-  if (HAL_DCMIPP_CSI_PIPE_DoubleBufferStart(&hcamera_dcmipp, pipe, DCMIPP_VIRTUAL_CHANNEL0, (uint32_t)pbuff1,
-                                            (uint32_t)pbuff2, Mode) != HAL_OK)
-#endif
   {
     return CMW_ERROR_PERIPH_FAILURE;
   }
@@ -468,12 +430,8 @@ int32_t CMW_CAMERA_DeInit(void)
 
   if (HAL_DCMIPP_PIPE_GetState(&hcamera_dcmipp, DCMIPP_PIPE1) != HAL_DCMIPP_PIPE_STATE_RESET)
   {
-#if CMW_CAMERA_USE_DVP
     /* DVP path: stop standard pipe capture. */
     ret = HAL_DCMIPP_PIPE_Stop(&hcamera_dcmipp, DCMIPP_PIPE1);
-#else
-    ret = HAL_DCMIPP_CSI_PIPE_Stop(&hcamera_dcmipp, DCMIPP_PIPE1, DCMIPP_VIRTUAL_CHANNEL0);
-#endif
     if (ret != HAL_OK)
     {
       return CMW_ERROR_PERIPH_FAILURE;
@@ -482,11 +440,7 @@ int32_t CMW_CAMERA_DeInit(void)
 
   if (HAL_DCMIPP_PIPE_GetState(&hcamera_dcmipp, DCMIPP_PIPE2) != HAL_DCMIPP_PIPE_STATE_RESET)
   {
-#if CMW_CAMERA_USE_DVP
     ret = HAL_DCMIPP_PIPE_Stop(&hcamera_dcmipp, DCMIPP_PIPE2);
-#else
-    ret = HAL_DCMIPP_CSI_PIPE_Stop(&hcamera_dcmipp, DCMIPP_PIPE2, DCMIPP_VIRTUAL_CHANNEL0);
-#endif
     if (ret != HAL_OK)
     {
       return CMW_ERROR_PERIPH_FAILURE;
@@ -859,68 +813,19 @@ void HAL_DCMIPP_PIPE_FrameEventCallback(DCMIPP_HandleTypeDef *hdcmipp, uint32_t 
   */
 void HAL_DCMIPP_MspInit(DCMIPP_HandleTypeDef *hdcmipp)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if (hdcmipp->Instance == DCMIPP)
+  {
+    /*** Enable peripheral clock ***/
+    /* Enable DCMIPP clock */
+    __HAL_RCC_DCMIPP_CLK_ENABLE();
+    __HAL_RCC_DCMIPP_FORCE_RESET();
+    __HAL_RCC_DCMIPP_RELEASE_RESET();
 
-  UNUSED(hdcmipp);
-
-  /*** Enable peripheral clock ***/
-  /* Enable DCMIPP clock */
-  __HAL_RCC_DCMIPP_CLK_ENABLE();
-  __HAL_RCC_DCMIPP_CLK_SLEEP_ENABLE();
-  __HAL_RCC_DCMIPP_FORCE_RESET();
-  __HAL_RCC_DCMIPP_RELEASE_RESET();
-
-  /* Configure DVP GPIOs on N6 similarly to CubeMX MSP style. */
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOE_CLK_ENABLE();
-  __HAL_RCC_GPION_CLK_ENABLE();
-
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF9_DCMIPP;
-
-  /* PB6/PB7/PB8/PB9 => D6/D7/VSYNC/D3 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* PC6 => D1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-  /* PE0/PE8 => D2/D4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_8;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
-  /* PN9 => D5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_9;
-  HAL_GPIO_Init(GPION, &GPIO_InitStruct);
-
-  /* PD0/PD5/PD7 => HSYNC/PIXCLK/D0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_5 | GPIO_PIN_7;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-  /*** Configure the NVIC for DCMIPP ***/
-  /* NVIC configuration for DCMIPP transfer complete interrupt */
-  HAL_NVIC_SetPriority(DCMIPP_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DCMIPP_IRQn);
-
-#if !CMW_CAMERA_USE_DVP
-  /*** Enable peripheral clock ***/
-  /* Enable CSI clock */
-  __HAL_RCC_CSI_CLK_ENABLE();
-  __HAL_RCC_CSI_CLK_SLEEP_ENABLE();
-  __HAL_RCC_CSI_FORCE_RESET();
-  __HAL_RCC_CSI_RELEASE_RESET();
-
-  /*** Configure the NVIC for CSI ***/
-  /* NVIC configuration for CSI transfer complete interrupt */
-  HAL_NVIC_SetPriority(CSI_IRQn, 0x07, 0);
-  HAL_NVIC_EnableIRQ(CSI_IRQn);
-#endif
-
+    /*** Configure the NVIC for DCMIPP ***/
+    /* NVIC configuration for DCMIPP transfer complete interrupt */
+    HAL_NVIC_SetPriority(DCMIPP_IRQn, 0x07, 0);
+    HAL_NVIC_EnableIRQ(DCMIPP_IRQn);
+  }
 }
 
 /**
@@ -930,33 +835,17 @@ void HAL_DCMIPP_MspInit(DCMIPP_HandleTypeDef *hdcmipp)
   */
 void HAL_DCMIPP_MspDeInit(DCMIPP_HandleTypeDef *hdcmipp)
 {
-  UNUSED(hdcmipp);
+  if (hdcmipp->Instance == DCMIPP)
+  {
+    __HAL_RCC_DCMIPP_FORCE_RESET();
+    __HAL_RCC_DCMIPP_RELEASE_RESET();
 
-  HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9);
-  HAL_GPIO_DeInit(GPIOC, GPIO_PIN_6);
-  HAL_GPIO_DeInit(GPIOE, GPIO_PIN_0 | GPIO_PIN_8);
-  HAL_GPIO_DeInit(GPION, GPIO_PIN_9);
-  HAL_GPIO_DeInit(GPIOD, GPIO_PIN_0 | GPIO_PIN_5 | GPIO_PIN_7);
+    /* Disable NVIC  for DCMIPP transfer complete interrupt */
+    HAL_NVIC_DisableIRQ(DCMIPP_IRQn);
 
-  __HAL_RCC_DCMIPP_FORCE_RESET();
-  __HAL_RCC_DCMIPP_RELEASE_RESET();
-
-  /* Disable NVIC  for DCMIPP transfer complete interrupt */
-  HAL_NVIC_DisableIRQ(DCMIPP_IRQn);
-
-  /* Disable DCMIPP clock */
-  __HAL_RCC_DCMIPP_CLK_DISABLE();
-
-#if !CMW_CAMERA_USE_DVP
-  __HAL_RCC_CSI_FORCE_RESET();
-  __HAL_RCC_CSI_RELEASE_RESET();
-
-  /* Disable NVIC for CSI transfer complete interrupt */
-  HAL_NVIC_DisableIRQ(CSI_IRQn);
-
-  /* Disable CSI clock */
-  __HAL_RCC_CSI_CLK_DISABLE();
-#endif
+    /* Disable DCMIPP clock */
+    __HAL_RCC_DCMIPP_CLK_DISABLE();
+  }
 }
 
 /**
@@ -1065,6 +954,60 @@ static ISP_StatusTypeDef CB_ISP_GetSensorInfo(uint32_t camera_instance, ISP_Sens
   return ISP_OK;
 }
 
+static uint32_t CMW_CAMERA_ClampDvpCase(uint32_t case_id)
+{
+  if (case_id < APP_DVP_CASE_MIN)
+  {
+    return APP_DVP_CASE_MIN;
+  }
+  if (case_id > APP_DVP_CASE_MAX)
+  {
+    return APP_DVP_CASE_MAX;
+  }
+  return case_id;
+}
+
+static void CMW_CAMERA_GetDvpCasePolarityFlags(uint32_t case_id, uint32_t *vs_high, uint32_t *hs_high, uint32_t *pck_rising)
+{
+  uint32_t case_bits = CMW_CAMERA_ClampDvpCase(case_id) - 1U;
+
+  if (vs_high != NULL)
+  {
+    *vs_high = ((case_bits & 0x4U) != 0U) ? 1U : 0U;
+  }
+  if (hs_high != NULL)
+  {
+    *hs_high = ((case_bits & 0x2U) != 0U) ? 1U : 0U;
+  }
+  if (pck_rising != NULL)
+  {
+    *pck_rising = ((case_bits & 0x1U) != 0U) ? 1U : 0U;
+  }
+}
+
+static void CMW_CAMERA_FillParallelConfigByCase(DCMIPP_ParallelConfTypeDef *parallel_conf, uint32_t case_id)
+{
+  uint32_t vs_high = 0U;
+  uint32_t hs_high = 0U;
+  uint32_t pck_rising = 0U;
+
+  if (parallel_conf == NULL)
+  {
+    return;
+  }
+
+  CMW_CAMERA_GetDvpCasePolarityFlags(case_id, &vs_high, &hs_high, &pck_rising);
+
+  parallel_conf->Format = DCMIPP_FORMAT_YUV422;
+  parallel_conf->VSPolarity = (vs_high != 0U) ? DCMIPP_VSPOLARITY_HIGH : DCMIPP_VSPOLARITY_LOW;
+  parallel_conf->HSPolarity = (hs_high != 0U) ? DCMIPP_HSPOLARITY_HIGH : DCMIPP_HSPOLARITY_LOW;
+  parallel_conf->PCKPolarity = (pck_rising != 0U) ? DCMIPP_PCKPOLARITY_RISING : DCMIPP_PCKPOLARITY_FALLING;
+  parallel_conf->ExtendedDataMode = DCMIPP_INTERFACE_8BITS;
+  parallel_conf->SynchroMode = DCMIPP_SYNCHRO_HARDWARE;
+  parallel_conf->SwapBits = DCMIPP_SWAPBITS_DISABLE;
+  parallel_conf->SwapCycles = DCMIPP_SWAPCYCLES_DISABLE;
+}
+
 
 static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
 {
@@ -1073,12 +1016,6 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
          (unsigned long)initSensors_params->height,
          (long)initSensors_params->fps);
   int32_t ret = CMW_ERROR_NONE;
-#if !CMW_CAMERA_USE_DVP
-  DCMIPP_CSI_ConfTypeDef csi_conf = { 0 };
-  DCMIPP_CSI_PIPE_ConfTypeDef csi_pipe_conf = { 0 };
-  uint32_t dt_format = 0;
-  uint32_t dt = 0;
-#endif
 
   CMW_DVP_config_t default_sensor_config = {0};
   CMW_DVP_config_t *sensor_config;
@@ -1096,28 +1033,28 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
     printf("[CMW] DVP init defaulted to 1920x1080\r\n");
   }
 
-  /* DVP path: configure parallel receiver instead of CSI host/VC. */
-#if CMW_CAMERA_USE_DVP
+  /* DVP path: configure parallel receiver. */
   DCMIPP_ParallelConfTypeDef parallel_conf = { 0 };
-  const uint32_t test_case_idx =
-      ((APP_DVP_VSYNC_ACTIVE_HIGH ? 1U : 0U) << 2) |
-      ((APP_DVP_HSYNC_ACTIVE_HIGH ? 1U : 0U) << 1) |
-      (APP_DVP_PIXCLK_RISING_EDGE ? 1U : 0U);
+  uint32_t case_id = CMW_CAMERA_ClampDvpCase(APP_DVP_TEST_CASE);
+  uint32_t vs_high = 0U;
+  uint32_t hs_high = 0U;
+  uint32_t pck_rising = 0U;
 
-  parallel_conf.Format = CMW_CAMERA_DVP_FORMAT;
-  parallel_conf.VSPolarity = CMW_CAMERA_DVP_VSPOLARITY;
-  parallel_conf.HSPolarity = CMW_CAMERA_DVP_HSPOLARITY;
-  parallel_conf.PCKPolarity = CMW_CAMERA_DVP_PCKPOLARITY;
-  parallel_conf.ExtendedDataMode = CMW_CAMERA_DVP_INTERFACE;
-  parallel_conf.SynchroMode = DCMIPP_SYNCHRO_HARDWARE;
-  parallel_conf.SwapBits = DCMIPP_SWAPBITS_DISABLE;
-  parallel_conf.SwapCycles = CMW_CAMERA_DVP_SWAPCYCLES;
+  CMW_CAMERA_GetDvpCasePolarityFlags(case_id, &vs_high, &hs_high, &pck_rising);
+  CMW_CAMERA_FillParallelConfigByCase(&parallel_conf, case_id);
 
-    printf("[CMW][DVP-TEST] case=%lu VSYNC=%s HSYNC=%s PIXCLK=%s-edge\r\n",
-      (unsigned long)(test_case_idx + 1U),
-      APP_DVP_VSYNC_ACTIVE_HIGH ? "active-high" : "active-low",
-      APP_DVP_HSYNC_ACTIVE_HIGH ? "active-high" : "active-low",
-      APP_DVP_PIXCLK_RISING_EDGE ? "rising" : "falling");
+  if ((uint32_t)APP_DVP_TEST_CASE != case_id)
+  {
+    printf("[CMW][DVP-TEST] requested case=%lu, clamped to case=%lu\r\n",
+           (unsigned long)APP_DVP_TEST_CASE,
+           (unsigned long)case_id);
+  }
+
+  printf("[CMW][DVP-TEST] case=%lu VSYNC=%s HSYNC=%s PIXCLK=%s-edge\r\n",
+         (unsigned long)case_id,
+         (vs_high != 0U) ? "active-high" : "active-low",
+         (hs_high != 0U) ? "active-high" : "active-low",
+         (pck_rising != 0U) ? "rising" : "falling");
 
   ret = HAL_DCMIPP_PARALLEL_SetConfig(&hcamera_dcmipp, &parallel_conf);
   if (ret != HAL_OK)
@@ -1132,48 +1069,6 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
          (unsigned long)parallel_conf.VSPolarity,
          (unsigned long)parallel_conf.PCKPolarity,
          (unsigned long)parallel_conf.ExtendedDataMode);
-#else
-  switch (sensor_config->pixel_format)
-  {
-    case CMW_PIXEL_FORMAT_DEFAULT:
-    case CMW_PIXEL_FORMAT_RAW10:
-    {
-      dt_format = DCMIPP_CSI_DT_BPP10;
-      dt = DCMIPP_DT_RAW10;
-      break;
-    }
-    default:
-      return CMW_ERROR_COMPONENT_FAILURE;
-  }
-
-  csi_conf.NumberOfLanes = DCMIPP_CSI_TWO_DATA_LANES;
-  csi_conf.DataLaneMapping = DCMIPP_CSI_PHYSICAL_DATA_LANES;
-  csi_conf.PHYBitrate = DCMIPP_CSI_PHY_BT_1600;
-  ret = HAL_DCMIPP_CSI_SetConfig(&hcamera_dcmipp, &csi_conf);
-  if (ret != HAL_OK)
-  {
-    return CMW_ERROR_PERIPH_FAILURE;
-  }
-
-  ret = HAL_DCMIPP_CSI_SetVCConfig(&hcamera_dcmipp, DCMIPP_VIRTUAL_CHANNEL0, dt_format);
-  if (ret != HAL_OK)
-  {
-    return CMW_ERROR_PERIPH_FAILURE;
-  }
-
-  csi_pipe_conf.DataTypeMode = DCMIPP_DTMODE_DTIDA;
-  csi_pipe_conf.DataTypeIDA = dt;
-  csi_pipe_conf.DataTypeIDB = 0;
-  /* Pre-initialize CSI config for all the pipes */
-  for (uint32_t i = DCMIPP_PIPE0; i <= DCMIPP_PIPE2; i++)
-  {
-    ret = HAL_DCMIPP_CSI_PIPE_SetConfig(&hcamera_dcmipp, i, &csi_pipe_conf);
-    if (ret != HAL_OK)
-    {
-      return CMW_ERROR_PERIPH_FAILURE;
-    }
-  }
-#endif
 
   printf("[CMW] DVP init done\r\n");
 
@@ -1308,15 +1203,7 @@ static int32_t CMW_CAMERA_SetPipe(DCMIPP_HandleTypeDef *hdcmipp, uint32_t pipe, 
   {
     if (!is_pipe1_2_shared)
     {
-#if !CMW_CAMERA_USE_DVP
-      /* CSI-only: pipe2 shares CSI input path with pipe1. */
-      ret = HAL_DCMIPP_PIPE_CSI_EnableShare(hdcmipp, pipe);
-      if (ret != HAL_OK)
-      {
-        return CMW_ERROR_COMPONENT_FAILURE;
-      }
-#endif
-      /* Keep state aligned in both modes to avoid re-entering this block. */
+      /* Keep state aligned to avoid re-entering this block. */
       is_pipe1_2_shared++;
     }
   }

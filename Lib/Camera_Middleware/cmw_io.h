@@ -80,11 +80,6 @@ extern "C" {
   #define CMW_I2C_WRITEREG16 BSP_I2C1_WriteReg16
 #endif /* STM32N6570_NUCLEO_REV */
 
-#define CSI2_CLK_ENABLE()               __HAL_RCC_CSI_CLK_ENABLE()
-#define CSI2_CLK_SLEEP_DISABLE()        __HAL_RCC_CSI_CLK_SLEEP_DISABLE()
-#define CSI2_CLK_FORCE_RESET()          __HAL_RCC_CSI_FORCE_RESET()
-#define CSI2_CLK_RELEASE_RESET()        __HAL_RCC_CSI_RELEASE_RESET()
-
 #else
 #error Add camera configuration GPIO for your specific board
 #endif

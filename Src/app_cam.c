@@ -306,34 +306,48 @@ static void CAM_InitCropConfig(CMW_Manual_roi_area_t *roi, int sensor_width, int
 
 static void DCMIPP_PipeInitDisplay(int sensor_width, int sensor_height)
 {
-  CMW_DCMIPP_Conf_t dcmipp_conf;
-  uint32_t hw_pitch;
+  DCMIPP_HandleTypeDef *hdcmipp;
+  DCMIPP_PipeConfTypeDef pipe_conf = { 0 };
+  DCMIPP_CropConfTypeDef crop_conf = { 0 };
+  uint32_t out_width;
+  uint32_t out_height;
+  uint32_t pitch;
   int ret;
 
   assert(VENC_WIDTH >= VENC_HEIGHT);
 
-  dcmipp_conf.output_width = VENC_WIDTH;
-  dcmipp_conf.output_height = VENC_HEIGHT;
-  dcmipp_conf.output_format = CAPTURE_FORMAT;
-  dcmipp_conf.output_bpp = CAPTURE_BPP;
-  dcmipp_conf.mode = CMW_Aspect_ratio_manual_roi;
-  dcmipp_conf.enable_swap = 0;
-  dcmipp_conf.enable_gamma_conversion = 0;
-  CAM_InitCropConfig(&dcmipp_conf.manual_conf, sensor_width, sensor_height);
-  ret = CMW_CAMERA_SetPipeConfig(DCMIPP_PIPE1, &dcmipp_conf, &hw_pitch);
-  assert(ret == HAL_OK);
-  assert(hw_pitch == dcmipp_conf.output_width * dcmipp_conf.output_bpp);
+  hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
+  out_width = (uint32_t)VENC_WIDTH;
+  out_height = (uint32_t)VENC_HEIGHT;
+  pitch = out_width * (uint32_t)CAPTURE_BPP;
 
-    printf("[CAM] pipe1 cfg out=%lux%lu fmt=%lu bpp=%lu pitch=%lu roi=(%lu,%lu %lux%lu)\r\n",
-         (unsigned long)dcmipp_conf.output_width,
-         (unsigned long)dcmipp_conf.output_height,
-      (unsigned long)dcmipp_conf.output_format,
-         (unsigned long)dcmipp_conf.output_bpp,
-         (unsigned long)hw_pitch,
-         (unsigned long)dcmipp_conf.manual_conf.offset_x,
-         (unsigned long)dcmipp_conf.manual_conf.offset_y,
-         (unsigned long)dcmipp_conf.manual_conf.width,
-         (unsigned long)dcmipp_conf.manual_conf.height);
+  pipe_conf.FrameRate = DCMIPP_FRAME_RATE_ALL;
+  pipe_conf.PixelPackerFormat = CAPTURE_FORMAT;
+  pipe_conf.PixelPipePitch = pitch;
+
+  ret = HAL_DCMIPP_PIPE_SetConfig(hdcmipp, DCMIPP_PIPE1, &pipe_conf);
+  assert(ret == HAL_OK);
+
+  crop_conf.VSize = (sensor_height > (int)out_height) ? out_height : (uint32_t)sensor_height;
+  crop_conf.HSize = (sensor_width > (int)out_width) ? out_width : (uint32_t)sensor_width;
+  crop_conf.VStart = ((uint32_t)sensor_height - crop_conf.VSize) / 2U;
+  crop_conf.HStart = ((uint32_t)sensor_width - crop_conf.HSize) / 2U;
+
+  ret = HAL_DCMIPP_PIPE_SetCropConfig(hdcmipp, DCMIPP_PIPE1, &crop_conf);
+  assert(ret == HAL_OK);
+  ret = HAL_DCMIPP_PIPE_EnableCrop(hdcmipp, DCMIPP_PIPE1);
+  assert(ret == HAL_OK);
+
+  printf("[CAM] pipe1 cfg out=%lux%lu fmt=%lu bpp=%lu pitch=%lu crop=(%lu,%lu %lux%lu)\r\n",
+         (unsigned long)out_width,
+         (unsigned long)out_height,
+         (unsigned long)pipe_conf.PixelPackerFormat,
+         (unsigned long)CAPTURE_BPP,
+         (unsigned long)pipe_conf.PixelPipePitch,
+         (unsigned long)crop_conf.HStart,
+         (unsigned long)crop_conf.VStart,
+         (unsigned long)crop_conf.HSize,
+         (unsigned long)crop_conf.VSize);
 }
 
 static void DCMIPP_PipeInitNn(int sensor_width, int sensor_height)
@@ -507,7 +521,9 @@ int CAM_GetVencHeight()
 
 void CMW_CAMERA_PIPE_ErrorCallback(uint32_t pipe)
 {
-  /* Avoid printf in ISR callback path; report via deferred health log. */
+  printf("[CAM][ERR] DCMIPP pipe error pipe=%lu state=%lu\r\n",
+         (unsigned long)pipe,
+         (unsigned long)HAL_DCMIPP_PIPE_GetState(CMW_CAMERA_GetDCMIPPHandle(), pipe));
   APP_CAM_DebugOnPipeError(pipe);
   /* FIXME : Need to tune sensor/ipplug so we can remove this implementation */
 }

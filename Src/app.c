@@ -64,6 +64,8 @@
 
 #define CAPTURE_BUFFER_NB (CAPTURE_DELAY + 2)
 
+static int is_cache_enable(void);
+
 static int BOARD_PinIsAf(GPIO_TypeDef *port, uint32_t pin_index, uint32_t af)
 {
   uint32_t mode = (port->MODER >> (pin_index * 2U)) & 0x3U;
@@ -234,9 +236,6 @@ static uint32_t g_cam_health_last_pipe1_vsync;
 static uint32_t g_cam_health_last_pipe_err[3];
 static uint32_t g_pipe1_rearm_ok_count;
 static uint32_t g_pipe1_rearm_fail_count;
-static uint32_t g_pipe1_last_frame_hash;
-static uint32_t g_pipe1_last_head_hash;
-static uint32_t g_pipe1_stable_seconds;
 static int g_pipe1_first_frame_pending_log;
 static int g_pipe2_first_frame_pending_log;
 static int g_pipe1_first_vsync_pending_log;
@@ -249,246 +248,22 @@ static int g_pipe1_rearm_fail_last_capt_idx;
 static int g_pipe1_rearm_fail_last_next_idx;
 static int g_pipe1_first_rearm_ok_next_idx;
 static uint32_t g_pipe1_first_rearm_ok_addr;
-static int g_pipe1_first_dump_done;
-static uint8_t g_pipe1_first16_snapshot[16];
-static uint8_t g_pipe1_first64_snapshot[64];
-static int g_pipe1_first16_snapshot_ready;
-static volatile int g_pipe1_snapshot_pending;
-static volatile int g_pipe1_snapshot_idx;
 
 /* Forward declarations: used by early debug dump helper before full definitions below. */
 static uint8_t capture_buffer[CAPTURE_BUFFER_NB][VENC_MAX_WIDTH * VENC_MAX_HEIGHT * CAPTURE_BPP];
 static int capture_buffer_disp_idx;
-static int is_cache_enable(void);
-static uint32_t app_frame_sample_hash(const uint8_t *fb, uint32_t frame_bytes);
-static void app_log_pipe1_data_1s(uint32_t frame_delta);
-
-static void app_capture_pipe1_snapshot_once(uint8_t *src)
-{
-  int i;
-
-  if ((g_pipe1_first16_snapshot_ready != 0) || (src == NULL))
-  {
-    return;
-  }
-
-  CACHE_OP(SCB_InvalidateDCache_by_Addr(src, 64));
-
-  for (i = 0; i < 16; i++)
-  {
-    g_pipe1_first16_snapshot[i] = src[i];
-  }
-
-  for (i = 0; i < 64; i++)
-  {
-    g_pipe1_first64_snapshot[i] = src[i];
-  }
-
-  g_pipe1_first16_snapshot_ready = 1;
-}
-
-static void app_capture_pipe1_snapshot_if_pending(void)
-{
-  int idx;
-
-  if (g_pipe1_first16_snapshot_ready != 0)
-  {
-    g_pipe1_snapshot_pending = 0;
-    return;
-  }
-
-  if (g_pipe1_snapshot_pending == 0)
-  {
-    return;
-  }
-
-  idx = g_pipe1_snapshot_idx;
-  g_pipe1_snapshot_pending = 0;
-
-  if ((idx < 0) || (idx >= CAPTURE_BUFFER_NB))
-  {
-    return;
-  }
-
-  app_capture_pipe1_snapshot_once(capture_buffer[idx]);
-}
-
-static void app_dump_pipe1_first_bytes_once(void)
-{
-  uint8_t *buf;
-  uint32_t sum16;
-  uint32_t sum64;
-  uint32_t frame_pitch;
-  uint32_t frame_bytes;
-  int i;
-
-  if ((g_pipe1_first_dump_done != 0) || (g_pipe1_first16_snapshot_ready == 0))
-  {
-    return;
-  }
-
-  buf = g_pipe1_first16_snapshot;
-  sum16 = 0U;
-  for (i = 0; i < 16; i++)
-  {
-    sum16 += buf[i];
-  }
-
-    sum64 = 0U;
-    for (i = 0; i < 64; i++)
-    {
-      sum64 += g_pipe1_first64_snapshot[i];
-    }
-
-    frame_pitch = (uint32_t)VENC_WIDTH * (uint32_t)CAPTURE_BPP;
-    frame_bytes = (uint32_t)VENC_WIDTH * (uint32_t)VENC_HEIGHT * (uint32_t)CAPTURE_BPP;
-
-    printf("[CAM][FRAME] pipe1 out=%dx%d bpp=%d pitch=%lu bytes=%lu fmt=%d\r\n",
-      VENC_WIDTH,
-      VENC_HEIGHT,
-      CAPTURE_BPP,
-      (unsigned long)frame_pitch,
-      (unsigned long)frame_bytes,
-      CAPTURE_FORMAT);
-
-  printf("[CAM][DATA] PIPE1 first 10 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-         buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9]);
-    printf("[CAM][DATA] PIPE1 first16_sum=%lu first64_sum=%lu addr=0x%08lX bpp=%d\r\n",
-         (unsigned long)sum16,
-      (unsigned long)sum64,
-         (unsigned long)buf,
-         CAPTURE_BPP);
-
-  g_pipe1_first_dump_done = 1;
-}
-
-static uint32_t app_frame_sample_hash(const uint8_t *fb, uint32_t frame_bytes)
-{
-  uint32_t hash = 2166136261UL;
-  uint32_t step;
-  uint32_t idx;
-  uint32_t i;
-
-  if ((fb == NULL) || (frame_bytes < 1024U))
-  {
-    return 0U;
-  }
-
-  step = frame_bytes / 257U;
-  if (step == 0U)
-  {
-    step = 1U;
-  }
-
-  for (i = 0U; i < 257U; i++)
-  {
-    idx = (i * step) % frame_bytes;
-    hash ^= fb[idx];
-    hash *= 16777619UL;
-  }
-
-  return hash;
-}
-
-static void app_log_pipe1_data_1s(uint32_t frame_delta)
-{
-  uint8_t *fb;
-  uint8_t *fb_mid;
-  uint8_t *fb_tail;
-  uint32_t frame_bytes;
-  uint32_t frame_hash;
-  uint32_t head_hash;
-  uint32_t sum_head64 = 0U;
-  uint32_t sum_mid64 = 0U;
-  uint32_t sum_tail64 = 0U;
-  uint32_t sum_head1k = 0U;
-  int idx;
-  uint32_t i;
-
-  if (frame_delta == 0U)
-  {
-    return;
-  }
-
-  idx = capture_buffer_disp_idx;
-  if ((idx < 0) || (idx >= CAPTURE_BUFFER_NB))
-  {
-    return;
-  }
-
-  fb = capture_buffer[idx];
-  frame_bytes = (uint32_t)VENC_WIDTH * (uint32_t)VENC_HEIGHT * (uint32_t)CAPTURE_BPP;
-  if (frame_bytes < 1024U)
-  {
-    return;
-  }
-
-  CACHE_OP(SCB_InvalidateDCache_by_Addr((void *)fb, frame_bytes));
-  fb_mid = fb + (frame_bytes / 2U);
-  fb_tail = fb + (frame_bytes - 64U);
-
-  for (i = 0U; i < 64U; i++)
-  {
-    sum_head64 += fb[i];
-    sum_mid64 += fb_mid[i];
-    sum_tail64 += fb_tail[i];
-  }
-  for (i = 0U; i < 1024U; i++)
-  {
-    sum_head1k += fb[i];
-  }
-
-  frame_hash = app_frame_sample_hash(fb, frame_bytes);
-  head_hash = (sum_head64 << 16) ^ (sum_head1k & 0xFFFFU);
-  if ((frame_hash == g_pipe1_last_frame_hash) && (head_hash == g_pipe1_last_head_hash))
-  {
-    g_pipe1_stable_seconds++;
-  }
-  else
-  {
-    g_pipe1_stable_seconds = 0U;
-  }
-
-  printf("[CAM][DATA][HEAD] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X | sum64=%lu sum1k=%lu\r\n",
-         fb[0], fb[1], fb[2], fb[3], fb[4], fb[5], fb[6], fb[7],
-         fb[8], fb[9], fb[10], fb[11], fb[12], fb[13], fb[14], fb[15],
-         (unsigned long)sum_head64, (unsigned long)sum_head1k);
-  printf("[CAM][DATA][MID ] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X | sum64=%lu\r\n",
-         fb_mid[0], fb_mid[1], fb_mid[2], fb_mid[3], fb_mid[4], fb_mid[5], fb_mid[6], fb_mid[7],
-         fb_mid[8], fb_mid[9], fb_mid[10], fb_mid[11], fb_mid[12], fb_mid[13], fb_mid[14], fb_mid[15],
-         (unsigned long)sum_mid64);
-  printf("[CAM][DATA][TAIL] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X | sum64=%lu\r\n",
-         fb_tail[0], fb_tail[1], fb_tail[2], fb_tail[3], fb_tail[4], fb_tail[5], fb_tail[6], fb_tail[7],
-         fb_tail[8], fb_tail[9], fb_tail[10], fb_tail[11], fb_tail[12], fb_tail[13], fb_tail[14], fb_tail[15],
-         (unsigned long)sum_tail64);
-  printf("[CAM][FREEZE] frame_hash=0x%08lX stable_s=%lu %s idx=%d addr=0x%08lX\r\n",
-         (unsigned long)frame_hash,
-         (unsigned long)g_pipe1_stable_seconds,
-         (g_pipe1_stable_seconds >= 3U) ? "POSSIBLE_FROZEN" : "OK",
-         idx,
-         (unsigned long)fb);
-
-  g_pipe1_last_frame_hash = frame_hash;
-  g_pipe1_last_head_hash = head_hash;
-}
 
 static void app_log_cam_health_1s(void)
 {
-  DCMIPP_HandleTypeDef *hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
-  uint32_t pipe1_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE1);
-  uint32_t pipe2_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE2);
-  uint32_t dcmipp_err = HAL_DCMIPP_GetError(hdcmipp);
   uint32_t now_ms = HAL_GetTick();
-  uint32_t pipe1_frame_delta;
 
   if ((now_ms - g_cam_health_last_ms) < 1000U)
   {
     return;
   }
 
-    pipe1_frame_delta = g_pipe1_frame_irq_count - g_cam_health_last_pipe1_frame;
-    printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu) st=(%lu,%lu) herr=0x%08lX\r\n",
-         (unsigned long)pipe1_frame_delta,
+    printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu)\r\n",
+         (unsigned long)(g_pipe1_frame_irq_count - g_cam_health_last_pipe1_frame),
          (unsigned long)(g_pipe2_frame_irq_count - g_cam_health_last_pipe2_frame),
          (unsigned long)(g_pipe1_vsync_irq_count - g_cam_health_last_pipe1_vsync),
       (unsigned long)g_pipe1_rearm_ok_count,
@@ -498,11 +273,7 @@ static void app_log_cam_health_1s(void)
          (unsigned long)(g_pipe_error_irq_count[2] - g_cam_health_last_pipe_err[2]),
          (unsigned long)g_pipe_error_irq_count[0],
          (unsigned long)g_pipe_error_irq_count[1],
-         (unsigned long)g_pipe_error_irq_count[2],
-         (unsigned long)pipe1_state,
-         (unsigned long)pipe2_state,
-         (unsigned long)dcmipp_err);
-    app_log_pipe1_data_1s(pipe1_frame_delta);
+         (unsigned long)g_pipe_error_irq_count[2]);
 
   g_cam_health_last_ms = now_ms;
   g_cam_health_last_pipe1_frame = g_pipe1_frame_irq_count;
@@ -1172,19 +943,19 @@ static void isp_thread_fct(void *arg)
 
     app_flush_cam_irq_logs();
     app_log_cam_health_1s();
-    app_capture_pipe1_snapshot_if_pending();
-    app_dump_pipe1_first_bytes_once();
   }
 }
 
 static void app_uvc_streaming_active(struct uvcl_callbacks *cbs, UVCL_StreamConf_t stream)
 {
   uvc_is_active = 1;
+  BSP_LED_On(LED_RED);
 }
 
 static void app_uvc_streaming_inactive(struct uvcl_callbacks *cbs)
 {
   uvc_is_active = 0;
+  BSP_LED_Off(LED_RED);
 }
 
 static void app_uvc_frame_release(struct uvcl_callbacks *cbs, void *frame)
@@ -1317,6 +1088,7 @@ void app_run()
                           &isp_thread);
   assert(hdl != NULL);
 
+  BSP_LED_On(LED_GREEN);
 }
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
@@ -1325,23 +1097,11 @@ int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
   if (pipe == DCMIPP_PIPE1)
   {
     g_pipe1_frame_irq_count++;
-    if (g_pipe1_first_frame_logged == 0)
-    {
-      g_pipe1_first_frame_logged = 1;
-      g_pipe1_first_frame_pending_log = 1;
-      g_pipe1_snapshot_idx = capture_buffer_capt_idx;
-      g_pipe1_snapshot_pending = 1;
-    }
     (void)app_main_pipe_frame_event();
   }
   else if (pipe == DCMIPP_PIPE2)
   {
     g_pipe2_frame_irq_count++;
-    if (g_pipe2_first_frame_logged == 0)
-    {
-      g_pipe2_first_frame_logged = 1;
-      g_pipe2_first_frame_pending_log = 1;
-    }
     app_ancillary_pipe_frame_event();
   }
 
