@@ -42,13 +42,24 @@ extern "C" {
 #define USE_RAM_MEMORY_APS256XX              1
 #endif /* USE_RAM_MEMORY_APS256XX */
 
+#ifndef BSP_XSPI_RAM_USE_W958D6NBKX
+/*
+ * Set to 1U to use Winbond W958D6NBKX HyperRAM 3.0 command/config path
+ * in stm32n6570_discovery_xspi.c (no extra source file required).
+ */
+#define BSP_XSPI_RAM_USE_W958D6NBKX          1U
+#endif /* BSP_XSPI_RAM_USE_W958D6NBKX */
+
 #ifndef BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT
 /*
- * Custom board note:
- * W958D6NBKX does not use APS256XX mode-register map.
- * Keep vendor register writes disabled by default.
+ * W958 path defaults to skip vendor-reg write until register map is validated.
+ * APS256XX path keeps vendor register init enabled.
  */
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
 #define BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT    1U
+#else
+#define BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT    0U
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
 #endif /* BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT */
 
 #ifndef BSP_XSPI_RAM_READ_LATENCY_CODE
@@ -66,6 +77,70 @@ extern "C" {
 #ifndef BSP_XSPI_RAM_BURST_TYPE
 #define BSP_XSPI_RAM_BURST_TYPE              0U /* 0: linear, 1: wrapped */
 #endif /* BSP_XSPI_RAM_BURST_TYPE */
+
+#ifndef BSP_XSPI_RAM_W958_CR0_INIT
+/* W958 CR0 default-style setup:
+ * [15]=1 normal, [14:12]=000 DS, [11:8]=1111 reserved, [7:4]=0010 latency=7,
+ * [3]=1 fixed-lat, [2]=1 legacy wrap, [1:0]=11 burst len 32.
+ */
+#define BSP_XSPI_RAM_W958_CR0_INIT           0x8F2FU
+#endif /* BSP_XSPI_RAM_W958_CR0_INIT */
+
+#ifndef BSP_XSPI_RAM_W958_CR1_INIT
+/* W958 CR1 default-style setup:
+ * [15:8]=FF reserved, [7]=1 reserved, [6]=1 single-ended clock, [5]=0 normal,
+ * [4:2]=000 full array refresh, [1:0]=01 (read-only on device).
+ */
+#define BSP_XSPI_RAM_W958_CR1_INIT           0xFFC1U
+#endif /* BSP_XSPI_RAM_W958_CR1_INIT */
+
+#ifndef BSP_XSPI_RAM_W958_ID0_ADDR
+#define BSP_XSPI_RAM_W958_ID0_ADDR           0x00000000U
+#endif /* BSP_XSPI_RAM_W958_ID0_ADDR */
+
+#ifndef BSP_XSPI_RAM_W958_ID1_ADDR
+/* For XSPI HyperBus command addressing, register-word step is 2 bytes on x16 bus. */
+#define BSP_XSPI_RAM_W958_ID1_ADDR           0x00000002U
+#endif /* BSP_XSPI_RAM_W958_ID1_ADDR */
+
+#ifndef BSP_XSPI_RAM_W958_CR0_ADDR
+/* Datasheet CR0 system address 0x800 -> command address 0x1000 on x16 register-word step. */
+#define BSP_XSPI_RAM_W958_CR0_ADDR           0x00001000U
+#endif /* BSP_XSPI_RAM_W958_CR0_ADDR */
+
+#ifndef BSP_XSPI_RAM_W958_CR1_ADDR
+/* Datasheet CR1 system address 0x801 -> command address 0x1002 on x16 register-word step. */
+#define BSP_XSPI_RAM_W958_CR1_ADDR           0x00001002U
+#endif /* BSP_XSPI_RAM_W958_CR1_ADDR */
+
+#ifndef BSP_XSPI_RAM_W958_REG_DATA_MODE
+/* Keep register transactions on x8 data mode for robust ID/CR probing. */
+#define BSP_XSPI_RAM_W958_REG_DATA_MODE      HAL_XSPI_DATA_8_LINES
+#endif /* BSP_XSPI_RAM_W958_REG_DATA_MODE */
+
+#ifndef BSP_XSPI_RAM_W958_MEM_DATA_MODE
+/* W958D6NBKX data array path can run in x16 mode on supported wiring/timing. */
+#define BSP_XSPI_RAM_W958_MEM_DATA_MODE      HAL_XSPI_DATA_16_LINES
+#endif /* BSP_XSPI_RAM_W958_MEM_DATA_MODE */
+
+#ifndef BSP_XSPI_RAM_W958_DATA_MODE
+/* Backward-compatible alias used by existing code paths. */
+#define BSP_XSPI_RAM_W958_DATA_MODE          BSP_XSPI_RAM_W958_MEM_DATA_MODE
+#endif /* BSP_XSPI_RAM_W958_DATA_MODE */
+
+#ifndef BSP_XSPI_RAM_W958_POST_INIT_PRESCALER
+/* 3 => same as safe bring-up speed configured in BSP_XSPI_RAM_Init(). */
+#define BSP_XSPI_RAM_W958_POST_INIT_PRESCALER 3U
+#endif /* BSP_XSPI_RAM_W958_POST_INIT_PRESCALER */
+
+#ifndef BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES
+#define BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES 4U
+#endif /* BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES */
+
+#ifndef BSP_XSPI_RAM_W958_ACCESS_CYCLES
+/* CR0 default latency code is 7; fixed latency mode requires 2x initial latency. */
+#define BSP_XSPI_RAM_W958_ACCESS_CYCLES      (2U * BSP_XSPI_RAM_READ_LATENCY_CODE)
+#endif /* BSP_XSPI_RAM_W958_ACCESS_CYCLES */
 
 #if (USE_NOR_MEMORY_MX66UW1G45G == 1)
 #include "../Components/mx66uw1g45g/mx66uw1g45g.h"

@@ -37,6 +37,15 @@ extern int __uncached_bss_end__;
 
 UART_HandleTypeDef huart1;
 
+int g_psram_init_ret = BSP_ERROR_NO_INIT;
+int g_psram_readid_ret = BSP_ERROR_NO_INIT;
+int g_psram_write_ret = BSP_ERROR_NO_INIT;
+int g_psram_read_ret = BSP_ERROR_NO_INIT;
+int g_psram_verify_mismatch = -1;
+int g_psram_mmp_ret = BSP_ERROR_NO_INIT;
+uint8_t g_psram_id[6];
+uint8_t g_psram_probe_rd8[8];
+
 static StaticTask_t main_thread;
 static StackType_t main_thread_stack[configMINIMAL_STACK_SIZE];
 
@@ -47,6 +56,7 @@ static void Security_Config();
 static void IAC_Config();
 static void CONSOLE_Config(void);
 static void Setup_Mpu(void);
+static void PSRAM_DebugProbe(void);
 static int main_freertos(void);
 static void main_thread_fct(void *arg);
 
@@ -319,6 +329,56 @@ static void DMA2D_Config()
   __HAL_RCC_DMA2D_RELEASE_RESET();
 }
 
+static void PSRAM_DebugProbe(void)
+{
+  static const uint32_t probe_addr = 0x00100000U;
+  uint8_t wr[16];
+  uint8_t rd[16] = {0};
+  int32_t ret;
+  int mismatch = 0;
+  int i;
+
+  ret = BSP_XSPI_RAM_ReadID(0, g_psram_id);
+  g_psram_readid_ret = (int)ret;
+  printf("[PSRAM] ReadID ret=%ld id=%02X %02X %02X %02X %02X %02X\r\n",
+         (long)ret, g_psram_id[0], g_psram_id[1], g_psram_id[2], g_psram_id[3], g_psram_id[4], g_psram_id[5]);
+
+  for (i = 0; i < 16; i++)
+  {
+    wr[i] = (uint8_t)(0xA0U + (uint8_t)i);
+  }
+
+  ret = BSP_XSPI_RAM_Write(0, wr, probe_addr, sizeof(wr));
+  g_psram_write_ret = (int)ret;
+  printf("[PSRAM] Write ret=%ld addr=0x%08lX len=%u\r\n",
+         (long)ret, (unsigned long)probe_addr, (unsigned)sizeof(wr));
+
+  ret = BSP_XSPI_RAM_Read(0, rd, probe_addr, sizeof(rd));
+  g_psram_read_ret = (int)ret;
+  printf("[PSRAM] Read ret=%ld addr=0x%08lX len=%u data=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+         (long)ret, (unsigned long)probe_addr, (unsigned)sizeof(rd),
+         rd[0], rd[1], rd[2], rd[3], rd[4], rd[5], rd[6], rd[7]);
+
+  for (i = 0; i < 8; i++)
+  {
+    g_psram_probe_rd8[i] = rd[i];
+  }
+
+  for (i = 0; i < 16; i++)
+  {
+    if (wr[i] != rd[i])
+    {
+      if (mismatch == 0)
+      {
+        printf("[PSRAM] first_mismatch i=%d wr=%02X rd=%02X\r\n", i, wr[i], rd[i]);
+      }
+      mismatch++;
+    }
+  }
+  g_psram_verify_mismatch = mismatch;
+  printf("[PSRAM] verify mismatch=%d\r\n", mismatch);
+}
+
 static int main_freertos()
 {
   TaskHandle_t hdl;
@@ -365,8 +425,16 @@ static void main_thread_fct(void *arg)
   NPUCache_config();
 
   /*** External RAM and NOR Flash *********************************************/
-  BSP_XSPI_RAM_Init(0);
-  BSP_XSPI_RAM_EnableMemoryMappedMode(0);
+  ret = BSP_XSPI_RAM_Init(0);
+  g_psram_init_ret = ret;
+  printf("[PSRAM] Init ret=%d\r\n", ret);
+  if (ret == BSP_ERROR_NONE)
+  {
+    PSRAM_DebugProbe();
+    ret = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
+    g_psram_mmp_ret = ret;
+    printf("[PSRAM] MMP enable ret=%d\r\n", ret);
+  }
 
   BSP_XSPI_NOR_Init_t NOR_Init;
   NOR_Init.InterfaceMode = BSP_XSPI_NOR_OPI_MODE;

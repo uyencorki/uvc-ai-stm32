@@ -18,6 +18,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "aps256xx.h"
+#include <stdio.h>
 
 /** @addtogroup BSP
   * @{
@@ -34,6 +35,16 @@
 /** @defgroup APS256XX_Exported_Functions APS256XX Exported Functions
   * @{
   */
+
+#ifndef APS256XX_DEBUG_LOG_ENABLE
+#define APS256XX_DEBUG_LOG_ENABLE 1
+#endif
+
+#if (APS256XX_DEBUG_LOG_ENABLE == 1)
+#define APS256XX_LOG(fmt, ...) printf("[APS256XX] " fmt "\r\n", ##__VA_ARGS__)
+#else
+#define APS256XX_LOG(fmt, ...)
+#endif
 
 /* Read/Write Array Commands *********************/
 /**
@@ -254,6 +265,12 @@ int32_t APS256XX_EnableMemoryMappedMode(XSPI_HandleTypeDef *Ctx, uint32_t ReadLa
   XSPI_RegularCmdTypeDef   sCommand = {0};
   XSPI_MemoryMappedTypeDef sMemMappedCfg = {0};
 
+  APS256XX_LOG("EnableMemoryMappedMode rl=%lu wl=%lu io=%lu burst=%lu",
+               (unsigned long)ReadLatencyCode,
+               (unsigned long)WriteLatencyCode,
+               (unsigned long)IOMode,
+               (unsigned long)BurstType);
+
   /* Initialize the write command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_WRITE_CFG;
   sCommand.InstructionMode     = HAL_XSPI_INSTRUCTION_8_LINES;
@@ -311,6 +328,8 @@ int32_t APS256XX_ReadReg(XSPI_HandleTypeDef *Ctx, uint32_t Address, uint8_t *Val
 {
   XSPI_RegularCmdTypeDef sCommand = {0};
 
+  APS256XX_LOG("ReadReg addr=0x%08lX latency=%lu", (unsigned long)Address, (unsigned long)LatencyCode);
+
   /* Initialize the read register command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_COMMON_CFG;
   sCommand.InstructionMode     = HAL_XSPI_INSTRUCTION_8_LINES;
@@ -356,6 +375,8 @@ int32_t APS256XX_ReadReg(XSPI_HandleTypeDef *Ctx, uint32_t Address, uint8_t *Val
 int32_t APS256XX_WriteReg(XSPI_HandleTypeDef *Ctx, uint32_t Address, uint8_t Value)
 {
   XSPI_RegularCmdTypeDef sCommand = {0};
+
+  APS256XX_LOG("WriteReg addr=0x%08lX val=0x%02X", (unsigned long)Address, Value);
 
   /* Initialize the write register command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -403,6 +424,8 @@ int32_t APS256XX_WriteReg(XSPI_HandleTypeDef *Ctx, uint32_t Address, uint8_t Val
   */
 int32_t APS256XX_ReadID(XSPI_HandleTypeDef *Ctx, uint8_t *ID, uint32_t LatencyCode)
 {
+  APS256XX_LOG("ReadID latency=%lu", (unsigned long)LatencyCode);
+
   /* Read the Mode Register 1 and 2 */
   if (APS256XX_ReadReg(Ctx, APS256XX_MR1_ADDRESS, ID, LatencyCode) != APS256XX_OK)
   {
@@ -414,6 +437,8 @@ int32_t APS256XX_ReadID(XSPI_HandleTypeDef *Ctx, uint8_t *ID, uint32_t LatencyCo
 
   /* Keep only Device ID and Device Density from Mode Register 2 */
   *(ID + 1) &= (APS256XX_MR2_DEVICE_ID | APS256XX_MR2_DENSITY);
+
+  APS256XX_LOG("ReadID result vid=0x%02X did=0x%02X", ID[0], ID[1]);
 
   return APS256XX_OK;
 }

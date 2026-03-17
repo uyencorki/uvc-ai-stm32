@@ -64,7 +64,20 @@
 
 #define CAPTURE_BUFFER_NB (CAPTURE_DELAY + 2)
 
+/* Lightweight frame dump: ISR only sets a flag, print happens in thread context. */
+#define APP_PIPE1_FRAME_DUMP_ENABLE 1
+#define APP_PIPE1_FRAME_DUMP_BYTES 16
+
 static int is_cache_enable(void);
+
+extern int g_psram_init_ret;
+extern int g_psram_readid_ret;
+extern int g_psram_write_ret;
+extern int g_psram_read_ret;
+extern int g_psram_verify_mismatch;
+extern int g_psram_mmp_ret;
+extern uint8_t g_psram_id[6];
+extern uint8_t g_psram_probe_rd8[8];
 
 static int BOARD_PinIsAf(GPIO_TypeDef *port, uint32_t pin_index, uint32_t af)
 {
@@ -236,6 +249,9 @@ static uint32_t g_cam_health_last_pipe1_vsync;
 static uint32_t g_cam_health_last_pipe_err[3];
 static uint32_t g_pipe1_rearm_ok_count;
 static uint32_t g_pipe1_rearm_fail_count;
+static volatile int g_pipe1_dump_pending;
+static volatile int g_pipe1_dump_idx = -1;
+static uint32_t g_pipe1_dump_last_ms;
 static int g_pipe1_first_frame_pending_log;
 static int g_pipe2_first_frame_pending_log;
 static int g_pipe1_first_vsync_pending_log;
@@ -252,6 +268,63 @@ static uint32_t g_pipe1_first_rearm_ok_addr;
 /* Forward declarations: used by early debug dump helper before full definitions below. */
 static uint8_t capture_buffer[CAPTURE_BUFFER_NB][VENC_MAX_WIDTH * VENC_MAX_HEIGHT * CAPTURE_BPP];
 static int capture_buffer_disp_idx;
+
+static void app_dump_pipe1_frame_data_1s(void)
+{
+#if APP_PIPE1_FRAME_DUMP_ENABLE
+  uint8_t *src;
+  uintptr_t src_addr;
+  uintptr_t inval_addr;
+  uint32_t inval_len;
+  uint32_t now_ms;
+  uint32_t sum;
+  int idx;
+  int i;
+  uint8_t sample[APP_PIPE1_FRAME_DUMP_BYTES];
+
+  if (g_pipe1_dump_pending == 0)
+  {
+    return;
+  }
+
+  now_ms = HAL_GetTick();
+  if ((now_ms - g_pipe1_dump_last_ms) < 1000U)
+  {
+    return;
+  }
+
+  idx = g_pipe1_dump_idx;
+  if ((idx < 0) || (idx >= CAPTURE_BUFFER_NB))
+  {
+    g_pipe1_dump_pending = 0;
+    return;
+  }
+
+  src = capture_buffer[idx];
+  src_addr = (uintptr_t)src;
+  inval_addr = src_addr & ~((uintptr_t)31U);
+  inval_len = ALIGN_VALUE((uint32_t)((src_addr - inval_addr) + APP_PIPE1_FRAME_DUMP_BYTES), 32U);
+  CACHE_OP(SCB_InvalidateDCache_by_Addr((uint8_t *)inval_addr, inval_len));
+
+  sum = 0U;
+  for (i = 0; i < APP_PIPE1_FRAME_DUMP_BYTES; i++)
+  {
+    sample[i] = src[i];
+    sum += sample[i];
+  }
+
+  printf("[CAM][DATA] p1 idx=%d addr=0x%08lX b0..b7=%02X %02X %02X %02X %02X %02X %02X %02X sum%u=%lu\r\n",
+         idx,
+         (unsigned long)capture_buffer[idx],
+         sample[0], sample[1], sample[2], sample[3],
+         sample[4], sample[5], sample[6], sample[7],
+         APP_PIPE1_FRAME_DUMP_BYTES,
+         (unsigned long)sum);
+
+  g_pipe1_dump_last_ms = now_ms;
+  g_pipe1_dump_pending = 0;
+#endif
+}
 
 static void app_log_cam_health_1s(void)
 {
@@ -533,6 +606,7 @@ static void bqueue_put_ready(bqueue_t *bq)
 
 static int app_main_pipe_frame_event(void)
 {
+  int completed_idx = capture_buffer_capt_idx;
   int next_disp_idx = (capture_buffer_disp_idx + 1) % CAPTURE_BUFFER_NB;
   int next_capt_idx = (capture_buffer_capt_idx + 1) % CAPTURE_BUFFER_NB;
   int ret;
@@ -554,6 +628,10 @@ static int app_main_pipe_frame_event(void)
   capture_buffer_disp_idx = next_disp_idx;
   capture_buffer_capt_idx = next_capt_idx;
   g_pipe1_rearm_ok_count++;
+#if APP_PIPE1_FRAME_DUMP_ENABLE
+  g_pipe1_dump_idx = completed_idx;
+  g_pipe1_dump_pending = 1;
+#endif
 
   if (g_pipe1_rearm_ok_count == 1U)
   {
@@ -943,6 +1021,7 @@ static void isp_thread_fct(void *arg)
 
     app_flush_cam_irq_logs();
     app_log_cam_health_1s();
+    app_dump_pipe1_frame_data_1s();
   }
 }
 
@@ -1002,6 +1081,16 @@ void app_run()
       VENC_DVP_WIDTH,
       VENC_DVP_HEIGHT,
       APP_DVP_BRINGUP_PIPE1_ONLY);
+    printf("[PSRAM][SUM] init=%d readid=%d id=%02X %02X %02X %02X %02X %02X write=%d read=%d mismatch=%d mmp=%d rd8=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+      g_psram_init_ret,
+      g_psram_readid_ret,
+      g_psram_id[0], g_psram_id[1], g_psram_id[2], g_psram_id[3], g_psram_id[4], g_psram_id[5],
+      g_psram_write_ret,
+      g_psram_read_ret,
+      g_psram_verify_mismatch,
+      g_psram_mmp_ret,
+      g_psram_probe_rd8[0], g_psram_probe_rd8[1], g_psram_probe_rd8[2], g_psram_probe_rd8[3],
+      g_psram_probe_rd8[4], g_psram_probe_rd8[5], g_psram_probe_rd8[6], g_psram_probe_rd8[7]);
     printf("[APP] buf capture0=0x%08lX captureN=%d nn_in0=0x%08lX nn_out0=0x%08lX\r\n",
       (unsigned long)capture_buffer[0],
       CAPTURE_BUFFER_NB,

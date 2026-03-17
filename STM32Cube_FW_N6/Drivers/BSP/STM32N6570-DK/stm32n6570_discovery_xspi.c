@@ -80,6 +80,52 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32n6570_discovery_xspi.h"
+#include <stdio.h>
+
+#ifndef BSP_XSPI_RAM_DEBUG_LOG_ENABLE
+#define BSP_XSPI_RAM_DEBUG_LOG_ENABLE 1U
+#endif
+
+#if (BSP_XSPI_RAM_DEBUG_LOG_ENABLE == 1U)
+#define XSPI_RAM_LOG(fmt, ...) printf("[XSPI-RAM] " fmt "\r\n", ##__VA_ARGS__)
+#else
+#define XSPI_RAM_LOG(fmt, ...)
+#endif
+
+#define XSPI_RAM_LOG_HAL_ERR(inst, tag) \
+  XSPI_RAM_LOG("%s HAL state=%lu err=0x%08lX SR=0x%08lX", \
+               (tag), \
+               (unsigned long)HAL_XSPI_GetState(&hxspi_ram[(inst)]), \
+               (unsigned long)HAL_XSPI_GetError(&hxspi_ram[(inst)]), \
+               (unsigned long)READ_REG(hxspi_ram[(inst)].Instance->SR))
+
+#define XSPI_RAM_LOG_REGS(inst, tag) \
+  XSPI_RAM_LOG("%s CR=0x%08lX DCR1=0x%08lX HLCR=0x%08lX CCR=0x%08lX WCCR=0x%08lX AR=0x%08lX DLR=%lu", \
+               (tag), \
+               (unsigned long)READ_REG(hxspi_ram[(inst)].Instance->CR), \
+               (unsigned long)READ_REG(hxspi_ram[(inst)].Instance->DCR1), \
+               (unsigned long)READ_REG(hxspi_ram[(inst)].Instance->HLCR), \
+               (unsigned long)READ_REG(hxspi_ram[(inst)].Instance->CCR), \
+               (unsigned long)READ_REG(hxspi_ram[(inst)].Instance->WCCR), \
+               (unsigned long)READ_REG(hxspi_ram[(inst)].Instance->AR), \
+               (unsigned long)(READ_REG(hxspi_ram[(inst)].Instance->DLR) + 1U))
+
+#define XSPI_RAM_LOG_CMD(tag, aspace, addr, aw, len, dqs, dmode) \
+  XSPI_RAM_LOG("%s aspace=%lu addr=0x%08lX aw=%lu len=%lu dqs=%lu dmode=%lu", \
+               (tag), \
+               (unsigned long)(aspace), \
+               (unsigned long)(addr), \
+               (unsigned long)(aw), \
+               (unsigned long)(len), \
+               (unsigned long)(dqs), \
+               (unsigned long)(dmode))
+
+#define XSPI_RAM_TRY_ABORT(inst, tag) \
+  do { \
+    CLEAR_BIT(hxspi_ram[(inst)].Instance->CR, XSPI_CR_FMODE); \
+    hxspi_ram[(inst)].State = HAL_XSPI_STATE_READY; \
+    XSPI_RAM_LOG("%s soft-recover to READY", (tag)); \
+  } while (0)
 
 /** @addtogroup BSP
   * @{
@@ -179,6 +225,12 @@ static int32_t XSPI_NOR_ExitOPIMode(uint32_t Instance);
   */
 static void XSPI_RAM_MspInit(const XSPI_HandleTypeDef *hxspi);
 static void XSPI_RAM_MspDeInit(const XSPI_HandleTypeDef *hxspi);
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+static int32_t XSPI_RAM_W958_WriteReg(uint32_t Instance, uint32_t RegIndex, uint16_t Value);
+static int32_t XSPI_RAM_W958_ReadReg(uint32_t Instance, uint32_t RegIndex, uint16_t *Value);
+static int32_t XSPI_RAM_W958_ReadMem(uint32_t Instance, uint8_t *pData, uint32_t ReadAddr, uint32_t Size);
+static int32_t XSPI_RAM_W958_WriteMem(uint32_t Instance, uint8_t *pData, uint32_t WriteAddr, uint32_t Size);
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
 /**
   * @}
   */
@@ -1128,6 +1180,160 @@ int32_t BSP_XSPI_NOR_LeaveDeepPowerDown(uint32_t Instance)
   * @{
   */
 
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+static int32_t XSPI_RAM_W958_WriteReg(uint32_t Instance, uint32_t RegIndex, uint16_t Value)
+{
+  XSPI_HyperbusCmdTypeDef sCommand = {0};
+  uint8_t wr[2];
+
+  wr[0] = (uint8_t)(Value & 0xFFU);
+  wr[1] = (uint8_t)((Value >> 8) & 0xFFU);
+
+  sCommand.AddressSpace = HAL_XSPI_REGISTER_ADDRESS_SPACE;
+  sCommand.Address = RegIndex;
+  sCommand.AddressWidth = HAL_XSPI_ADDRESS_32_BITS;
+  sCommand.DataLength = 2U;
+  sCommand.DQSMode = HAL_XSPI_DQS_DISABLE;
+  sCommand.DataMode = BSP_XSPI_RAM_W958_REG_DATA_MODE;
+
+  XSPI_RAM_LOG_CMD("[W958][CMD] WriteReg", sCommand.AddressSpace, sCommand.Address, sCommand.AddressWidth,
+                   sCommand.DataLength, sCommand.DQSMode, sCommand.DataMode);
+
+  if (HAL_XSPI_HyperbusCmd(&hxspi_ram[Instance], &sCommand, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] WriteReg HyperbusCmd failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] WriteReg regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] WriteReg");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+  if (HAL_XSPI_Transmit(&hxspi_ram[Instance], wr, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] WriteReg TX failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] WriteReg regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] WriteReg");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+
+  XSPI_RAM_LOG("[W958] WriteReg addr=0x%08lX val=0x%04X", (unsigned long)RegIndex, Value);
+  return BSP_ERROR_NONE;
+}
+
+static int32_t XSPI_RAM_W958_ReadReg(uint32_t Instance, uint32_t RegIndex, uint16_t *Value)
+{
+  XSPI_HyperbusCmdTypeDef sCommand = {0};
+  uint8_t rd[2] = {0};
+
+  if (Value == NULL)
+  {
+    return BSP_ERROR_WRONG_PARAM;
+  }
+
+  sCommand.AddressSpace = HAL_XSPI_REGISTER_ADDRESS_SPACE;
+  sCommand.Address = RegIndex;
+  sCommand.AddressWidth = HAL_XSPI_ADDRESS_32_BITS;
+  sCommand.DataLength = 2U;
+  sCommand.DQSMode = HAL_XSPI_DQS_ENABLE;
+  sCommand.DataMode = BSP_XSPI_RAM_W958_REG_DATA_MODE;
+
+  XSPI_RAM_LOG_CMD("[W958][CMD] ReadReg", sCommand.AddressSpace, sCommand.Address, sCommand.AddressWidth,
+                   sCommand.DataLength, sCommand.DQSMode, sCommand.DataMode);
+
+  if (HAL_XSPI_HyperbusCmd(&hxspi_ram[Instance], &sCommand, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] ReadReg HyperbusCmd failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] ReadReg regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] ReadReg");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+  if (HAL_XSPI_Receive(&hxspi_ram[Instance], rd, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] ReadReg RX failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] ReadReg regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] ReadReg");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+
+  *Value = ((uint16_t)rd[1] << 8) | rd[0];
+  XSPI_RAM_LOG("[W958] ReadReg addr=0x%08lX val=0x%04X", (unsigned long)RegIndex, (unsigned int)*Value);
+  return BSP_ERROR_NONE;
+}
+
+static int32_t XSPI_RAM_W958_ReadMem(uint32_t Instance, uint8_t *pData, uint32_t ReadAddr, uint32_t Size)
+{
+  XSPI_HyperbusCmdTypeDef sCommand = {0};
+
+  if ((pData == NULL) || (Size == 0U))
+  {
+    return BSP_ERROR_WRONG_PARAM;
+  }
+
+  sCommand.AddressSpace = HAL_XSPI_MEMORY_ADDRESS_SPACE;
+  sCommand.Address = ReadAddr;
+  sCommand.AddressWidth = HAL_XSPI_ADDRESS_32_BITS;
+  sCommand.DataLength = Size;
+  sCommand.DQSMode = HAL_XSPI_DQS_ENABLE;
+  sCommand.DataMode = BSP_XSPI_RAM_W958_MEM_DATA_MODE;
+
+  XSPI_RAM_LOG_CMD("[W958][CMD] ReadMem", sCommand.AddressSpace, sCommand.Address, sCommand.AddressWidth,
+                   sCommand.DataLength, sCommand.DQSMode, sCommand.DataMode);
+
+  if (HAL_XSPI_HyperbusCmd(&hxspi_ram[Instance], &sCommand, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] ReadMem HyperbusCmd failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] ReadMem regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] ReadMem");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+  if (HAL_XSPI_Receive(&hxspi_ram[Instance], pData, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] ReadMem RX failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] ReadMem regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] ReadMem");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+
+  return BSP_ERROR_NONE;
+}
+
+static int32_t XSPI_RAM_W958_WriteMem(uint32_t Instance, uint8_t *pData, uint32_t WriteAddr, uint32_t Size)
+{
+  XSPI_HyperbusCmdTypeDef sCommand = {0};
+
+  if ((pData == NULL) || (Size == 0U))
+  {
+    return BSP_ERROR_WRONG_PARAM;
+  }
+
+  sCommand.AddressSpace = HAL_XSPI_MEMORY_ADDRESS_SPACE;
+  sCommand.Address = WriteAddr;
+  sCommand.AddressWidth = HAL_XSPI_ADDRESS_32_BITS;
+  sCommand.DataLength = Size;
+  /* On write path, keep RWDS disabled to avoid unintended byte-mask behavior. */
+  sCommand.DQSMode = HAL_XSPI_DQS_DISABLE;
+  sCommand.DataMode = BSP_XSPI_RAM_W958_MEM_DATA_MODE;
+
+  XSPI_RAM_LOG_CMD("[W958][CMD] WriteMem", sCommand.AddressSpace, sCommand.Address, sCommand.AddressWidth,
+                   sCommand.DataLength, sCommand.DQSMode, sCommand.DataMode);
+
+  if (HAL_XSPI_HyperbusCmd(&hxspi_ram[Instance], &sCommand, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] WriteMem HyperbusCmd failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] WriteMem regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] WriteMem");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+  if (HAL_XSPI_Transmit(&hxspi_ram[Instance], pData, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+  {
+    XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] WriteMem TX failed");
+    XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] WriteMem regs");
+    XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] WriteMem");
+    return BSP_ERROR_PERIPH_FAILURE;
+  }
+
+  return BSP_ERROR_NONE;
+}
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
+
 /**
   * @brief  Initializes the XSPI interface.
   * @param  Instance   XSPI Instance
@@ -1183,6 +1389,58 @@ int32_t BSP_XSPI_RAM_Init(uint32_t Instance)
 
     if (ret == BSP_ERROR_NONE)
     {
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+      XSPI_HyperbusCfgTypeDef hb_cfg = {0};
+      XSPI_RAM_LOG("[W958] init path selected");
+      XSPI_RAM_LOG("[W958] map ID0=0x%08lX ID1=0x%08lX CR0=0x%08lX CR1=0x%08lX",
+                   (unsigned long)BSP_XSPI_RAM_W958_ID0_ADDR,
+                   (unsigned long)BSP_XSPI_RAM_W958_ID1_ADDR,
+                   (unsigned long)BSP_XSPI_RAM_W958_CR0_ADDR,
+                   (unsigned long)BSP_XSPI_RAM_W958_CR1_ADDR);
+
+      hb_cfg.RWRecoveryTimeCycle = BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES;
+      hb_cfg.AccessTimeCycle = BSP_XSPI_RAM_W958_ACCESS_CYCLES;
+      hb_cfg.WriteZeroLatency = HAL_XSPI_LATENCY_ON_WRITE;
+      hb_cfg.LatencyMode = HAL_XSPI_FIXED_LATENCY;
+      XSPI_RAM_LOG("[W958] hb_cfg trwr=%lu tacc=%lu write_lat=%lu lat_mode=%lu reg_dmode=%lu mem_dmode=%lu post_ps=%lu",
+                   (unsigned long)hb_cfg.RWRecoveryTimeCycle,
+                   (unsigned long)hb_cfg.AccessTimeCycle,
+                   (unsigned long)hb_cfg.WriteZeroLatency,
+                   (unsigned long)hb_cfg.LatencyMode,
+                   (unsigned long)BSP_XSPI_RAM_W958_REG_DATA_MODE,
+                   (unsigned long)BSP_XSPI_RAM_W958_MEM_DATA_MODE,
+                   (unsigned long)BSP_XSPI_RAM_W958_POST_INIT_PRESCALER);
+      if (HAL_XSPI_HyperbusCfg(&hxspi_ram[Instance], &hb_cfg, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+      {
+        ret = BSP_ERROR_PERIPH_FAILURE;
+        XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] HyperbusCfg failed");
+        XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] init regs");
+      }
+      else
+      {
+        XSPI_RAM_LOG_REGS(Instance, "[W958] init regs");
+      }
+
+#if (BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT == 0U)
+      if (ret == BSP_ERROR_NONE)
+      {
+        if (XSPI_RAM_W958_WriteReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, BSP_XSPI_RAM_W958_CR0_INIT) != BSP_ERROR_NONE)
+        {
+          ret = BSP_ERROR_COMPONENT_FAILURE;
+        }
+        else if (XSPI_RAM_W958_WriteReg(Instance, BSP_XSPI_RAM_W958_CR1_ADDR, BSP_XSPI_RAM_W958_CR1_INIT) != BSP_ERROR_NONE)
+        {
+          ret = BSP_ERROR_COMPONENT_FAILURE;
+        }
+      }
+#endif /* (BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT == 0U) */
+
+      if ((ret == BSP_ERROR_NONE) &&
+          (HAL_XSPI_SetClockPrescaler(&hxspi_ram[Instance], BSP_XSPI_RAM_W958_POST_INIT_PRESCALER) != HAL_OK))
+      {
+        ret = BSP_ERROR_PERIPH_FAILURE;
+      }
+#else
 #if (BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT == 0U)
       /* APS256XX-specific register tuning (disable for non-APS HyperRAM). */
       if (APS256XX_WriteReg(&hxspi_ram[Instance], 0U, 0x30U) != APS256XX_OK) /* Read latency=7 */
@@ -1203,6 +1461,7 @@ int32_t BSP_XSPI_RAM_Init(uint32_t Instance)
       {
         ret = BSP_ERROR_PERIPH_FAILURE;
       }
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
     }
 
   }
@@ -1281,7 +1540,11 @@ __weak HAL_StatusTypeDef MX_XSPI_RAM_Init(XSPI_HandleTypeDef *hxspi, MX_XSPI_Ini
   hxspi->Instance = XSPI1;
 
   hxspi->Init.FifoThresholdByte          = 8;
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+  hxspi->Init.MemoryType                 = HAL_XSPI_MEMTYPE_HYPERBUS;
+#else
   hxspi->Init.MemoryType                 = HAL_XSPI_MEMTYPE_APMEM_16BITS;
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
   hxspi->Init.MemoryMode                 = HAL_XSPI_SINGLE_MEM;
   hxspi->Init.MemorySize                 = Init->MemorySize;
   hxspi->Init.MemorySelect               = HAL_XSPI_CSSEL_NCS1;
@@ -1401,6 +1664,14 @@ int32_t BSP_XSPI_RAM_Read(uint32_t Instance, uint8_t *pData, uint32_t ReadAddr, 
   }
   else
   {
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+    ret = XSPI_RAM_W958_ReadMem(Instance, pData, ReadAddr, Size);
+    if (ret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG("[W958][ERR] Read addr=0x%08lX size=%lu ret=%ld",
+                   (unsigned long)ReadAddr, (unsigned long)Size, (long)ret);
+    }
+#else
     if (APS256XX_Read(&hxspi_ram[Instance], pData, ReadAddr, Size,
                       BSP_XSPI_RAM_READ_LATENCY_CODE,
                       BSP_XSPI_RAM_IO_MODE,
@@ -1408,6 +1679,7 @@ int32_t BSP_XSPI_RAM_Read(uint32_t Instance, uint8_t *pData, uint32_t ReadAddr, 
     {
       ret = BSP_ERROR_PERIPH_FAILURE;
     }
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
   }
 
   /* Return BSP status */
@@ -1433,6 +1705,14 @@ int32_t BSP_XSPI_RAM_Write(uint32_t Instance, uint8_t *pData, uint32_t WriteAddr
   }
   else
   {
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+    ret = XSPI_RAM_W958_WriteMem(Instance, pData, WriteAddr, Size);
+    if (ret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG("[W958][ERR] Write addr=0x%08lX size=%lu ret=%ld",
+                   (unsigned long)WriteAddr, (unsigned long)Size, (long)ret);
+    }
+#else
     if (APS256XX_Write(&hxspi_ram[Instance], pData, WriteAddr, Size,
                        BSP_XSPI_RAM_WRITE_LATENCY_CODE,
                        BSP_XSPI_RAM_IO_MODE,
@@ -1440,6 +1720,7 @@ int32_t BSP_XSPI_RAM_Write(uint32_t Instance, uint8_t *pData, uint32_t WriteAddr
     {
       ret = BSP_ERROR_PERIPH_FAILURE;
     }
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
   }
 
   /* Return BSP status */
@@ -1462,6 +1743,39 @@ int32_t BSP_XSPI_RAM_EnableMemoryMappedMode(uint32_t Instance)
   }
   else
   {
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+    XSPI_HyperbusCmdTypeDef sCommand = {0};
+    XSPI_MemoryMappedTypeDef sMemMappedCfg = {0};
+
+    sCommand.AddressSpace = HAL_XSPI_MEMORY_ADDRESS_SPACE;
+    sCommand.Address = 0U;
+    sCommand.AddressWidth = HAL_XSPI_ADDRESS_32_BITS;
+    sCommand.DataLength = 2U;
+    sCommand.DQSMode = HAL_XSPI_DQS_ENABLE;
+    sCommand.DataMode = BSP_XSPI_RAM_W958_MEM_DATA_MODE;
+    XSPI_RAM_LOG_CMD("[W958][CMD] MMP prepare", sCommand.AddressSpace, sCommand.Address, sCommand.AddressWidth,
+                     sCommand.DataLength, sCommand.DQSMode, sCommand.DataMode);
+    if (HAL_XSPI_HyperbusCmd(&hxspi_ram[Instance], &sCommand, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
+    {
+      ret = BSP_ERROR_PERIPH_FAILURE;
+      XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] MMP HyperbusCmd failed");
+      XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] MMP regs");
+      XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] MMP");
+    }
+    else
+    {
+      sMemMappedCfg.TimeOutActivation = HAL_XSPI_TIMEOUT_COUNTER_DISABLE;
+      sMemMappedCfg.NoPrefetchData = HAL_XSPI_AUTOMATIC_PREFETCH_ENABLE;
+      sMemMappedCfg.NoPrefetchAXI = HAL_XSPI_AXI_PREFETCH_ENABLE;
+      if (HAL_XSPI_MemoryMapped(&hxspi_ram[Instance], &sMemMappedCfg) != HAL_OK)
+      {
+        ret = BSP_ERROR_PERIPH_FAILURE;
+        XSPI_RAM_LOG_HAL_ERR(Instance, "[W958][ERR] MMP enable failed");
+        XSPI_RAM_LOG_REGS(Instance, "[W958][ERR] MMP regs");
+        XSPI_RAM_TRY_ABORT(Instance, "[W958][ERR] MMP");
+      }
+    }
+#else
     if (APS256XX_EnableMemoryMappedMode(&hxspi_ram[Instance],
                                         BSP_XSPI_RAM_READ_LATENCY_CODE,
                                         BSP_XSPI_RAM_WRITE_LATENCY_CODE,
@@ -1473,6 +1787,17 @@ int32_t BSP_XSPI_RAM_EnableMemoryMappedMode(uint32_t Instance)
     else
     {
       XSPI_Ram_Ctx[Instance].IsInitialized = XSPI_ACCESS_MMP;
+    }
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
+
+    if (ret == BSP_ERROR_NONE)
+    {
+      XSPI_Ram_Ctx[Instance].IsInitialized = XSPI_ACCESS_MMP;
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+      XSPI_RAM_LOG("[W958] MMP enabled");
+#else
+      XSPI_RAM_LOG("[APS256XX] MMP enabled");
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
     }
   }
 
@@ -1533,13 +1858,69 @@ int32_t BSP_XSPI_RAM_ReadID(uint32_t Instance, uint8_t *Id)
   {
     ret = BSP_ERROR_WRONG_PARAM;
   }
-  else if (APS256XX_ReadID(&hxspi_ram[0], Id, 6U) != APS256XX_OK)
-  {
-    ret = BSP_ERROR_COMPONENT_FAILURE;
-  }
   else
   {
-    ret = BSP_ERROR_NONE;
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+    uint16_t id0 = 0U;
+    uint16_t id1 = 0U;
+    uint16_t cr0 = 0U;
+    uint16_t cr1 = 0U;
+    uint32_t alt_id1_addr;
+    int32_t reg_ret;
+
+    if (Id == NULL)
+    {
+      ret = BSP_ERROR_WRONG_PARAM;
+    }
+    else if (XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_ID0_ADDR, &id0) != BSP_ERROR_NONE)
+    {
+      ret = BSP_ERROR_COMPONENT_FAILURE;
+      XSPI_RAM_LOG("[W958][ERR] ReadID failed on reg0");
+    }
+    else
+    {
+      alt_id1_addr = (BSP_XSPI_RAM_W958_ID1_ADDR == 0x00000001U) ? 0x00000002U : 0x00000001U;
+      reg_ret = XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_ID1_ADDR, &id1);
+      if (reg_ret != BSP_ERROR_NONE)
+      {
+        XSPI_RAM_LOG("[W958][WARN] ID1 read failed at cfg addr=0x%08lX, try alt=0x%08lX",
+                     (unsigned long)BSP_XSPI_RAM_W958_ID1_ADDR,
+                     (unsigned long)alt_id1_addr);
+        reg_ret = XSPI_RAM_W958_ReadReg(Instance, alt_id1_addr, &id1);
+      }
+
+      if (reg_ret != BSP_ERROR_NONE)
+      {
+        ret = BSP_ERROR_COMPONENT_FAILURE;
+        XSPI_RAM_LOG("[W958][ERR] ReadID failed on reg1/alt");
+      }
+      else
+      {
+        /* Extra probes for debugging register map and CR readability */
+        (void)XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, &cr0);
+        (void)XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_CR1_ADDR, &cr1);
+
+        Id[0] = (uint8_t)(id0 & 0xFFU);
+        Id[1] = (uint8_t)((id0 >> 8) & 0xFFU);
+        Id[2] = (uint8_t)(id1 & 0xFFU);
+        Id[3] = (uint8_t)((id1 >> 8) & 0xFFU);
+        Id[4] = 0U;
+        Id[5] = 0U;
+        XSPI_RAM_LOG("[W958] ReadID id0=0x%04X id1=0x%04X cr0=0x%04X cr1=0x%04X",
+                     (unsigned int)id0, (unsigned int)id1, (unsigned int)cr0, (unsigned int)cr1);
+        ret = BSP_ERROR_NONE;
+      }
+    }
+#else
+    if (APS256XX_ReadID(&hxspi_ram[Instance], Id, 6U) != APS256XX_OK)
+    {
+      ret = BSP_ERROR_COMPONENT_FAILURE;
+    }
+    else
+    {
+      ret = BSP_ERROR_NONE;
+    }
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
   }
 
   /* Return BSP status */
