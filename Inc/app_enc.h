@@ -21,10 +21,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef enum {
+  ENC_INPUT_RGB888 = 0,
+  ENC_INPUT_YUV422_YUYV,
+  ENC_INPUT_YUV422_UYVY,
+} ENC_InputType_t;
+
 typedef struct {
   int width;
   int height;
   int fps;
+  ENC_InputType_t input_type;
 } ENC_Conf_t;
 
 void ENC_Init(ENC_Conf_t *p_conf);

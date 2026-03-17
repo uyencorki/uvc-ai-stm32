@@ -65,8 +65,42 @@
 #define CAPTURE_BUFFER_NB (CAPTURE_DELAY + 2)
 
 /* Lightweight frame dump: ISR only sets a flag, print happens in thread context. */
-#define APP_PIPE1_FRAME_DUMP_ENABLE 1
+#define APP_PIPE1_FRAME_DUMP_ENABLE 0
 #define APP_PIPE1_FRAME_DUMP_BYTES 16
+#define APP_PIPE1_FRAME_DUMP_PERIOD_MS 5000U
+#define APP_CAM_HEALTH_LOG_ENABLE 1
+#define APP_DCMIPP_ERR_LOG_ENABLE 1
+/*
+ * Keep OVR soft-recover disabled by default:
+ * HAL already disables PIPE1_OVR IRQ on first hit; aggressive re-enable here
+ * can create interrupt storms (err1/recov jumping by thousands per second).
+ */
+#define APP_DCMIPP_ERR_SOFT_RECOVER 0
+#define APP_DCMIPP_ERR_LOG_PERIOD_MS 1000U
+#define APP_DCMIPP_ERR_POLL_ENABLE 1
+#define APP_DCMIPP_ERR_POLL_PERIOD_MS 1000U
+#define APP_DCMIPP_ERR_PROBE_CLEAR_ENABLE 1
+#define APP_DCMIPP_ERR_POLL_HOLD_LOG_PERIOD_MS 5000U
+#define APP_DCMIPP_ERR_PROBE_LOG_PERIOD_MS 5000U
+#define APP_DCMIPP_ERR_AUTO_RECOVER_ENABLE 1
+#define APP_DCMIPP_ERR_AUTO_RECOVER_STABLE_POLLS 2U
+
+/* Encoded bitstream debug: log at low rate to avoid flooding UART/CPU. */
+#define APP_ENC_DUMP_ENABLE 0
+#define APP_ENC_DUMP_PERIOD_MS 1000U
+#define APP_ENC_DUMP_BYTES 16
+#define APP_ENC_DUMP_SUM_BYTES 64
+
+/* Master switch for any UVC-prefixed log print. */
+#define APP_UVC_LOG_ENABLE 0
+/* Keep callback-level stream logs even when APP_UVC_LOG_ENABLE is off. */
+#define APP_UVC_CB_LOG_ENABLE 1
+
+/* UVC TX-path debug (after encode, before/after USB submit). */
+#define APP_UVC_TX_DEBUG_ENABLE 0
+#define APP_UVC_TX_DEBUG_PERIOD_MS 1000U
+#define APP_UVC_TX_SIG_BYTES 64
+#define APP_UVC_CLEAN_DCACHE_BEFORE_SHOW 1
 
 static int is_cache_enable(void);
 
@@ -264,6 +298,74 @@ static int g_pipe1_rearm_fail_last_capt_idx;
 static int g_pipe1_rearm_fail_last_next_idx;
 static int g_pipe1_first_rearm_ok_next_idx;
 static uint32_t g_pipe1_first_rearm_ok_addr;
+static volatile int g_pipe_error_pending_log;
+static uint32_t g_pipe_error_last_pipe;
+static uint32_t g_pipe_error_last_state;
+static uint32_t g_pipe_error_last_code;
+static uint32_t g_pipe_error_last_cmsr2;
+static uint32_t g_pipe_error_last_cmier;
+static uint32_t g_pipe_error_last_p1fctcr;
+static uint32_t g_pipe_error_soft_recover_count;
+static uint32_t g_pipe_error_last_log_ms;
+static uint32_t g_pipe_error_poll_last_ms;
+static uint32_t g_pipe_error_poll_last_err;
+static uint32_t g_pipe_error_poll_last_cmsr2;
+static uint32_t g_pipe_error_poll_last_cmier;
+static uint32_t g_pipe_error_poll_was_active;
+static uint32_t g_pipe_error_poll_last_hold_log_ms;
+static uint32_t g_pipe_error_probe_clear_ok_count;
+static uint32_t g_pipe_error_probe_reassert_count;
+static uint32_t g_pipe_error_probe_last_log_ms;
+static uint32_t g_pipe_error_stable_clear_polls;
+static uint32_t g_pipe_error_auto_recover_count;
+static volatile int g_pipe1_last_completed_idx = -1;
+static volatile uint32_t g_pipe1_completed_seq;
+
+/* UVC pipeline debug counters */
+static uint32_t g_uvc_stream_active_count;
+static uint32_t g_uvc_stream_inactive_count;
+static uint32_t g_uvc_enc_ok_count;
+static uint32_t g_uvc_enc_fail_count;
+static uint32_t g_uvc_drop_busy_count;
+static uint32_t g_uvc_show_req_count;
+static uint32_t g_uvc_show_ok_count;
+static uint32_t g_uvc_show_fail_count;
+static uint32_t g_uvc_frame_release_count;
+static uint32_t g_uvc_bringup_submit_count;
+static int g_uvc_last_submit_idx = -1;
+static int g_uvc_last_enc_ret;
+static int g_uvc_last_show_ret;
+static int g_uvc_last_show_len;
+static uint32_t g_uvc_health_last_ms;
+static uint32_t g_uvc_health_last_stream_active_count;
+static uint32_t g_uvc_health_last_stream_inactive_count;
+static uint32_t g_uvc_health_last_enc_ok_count;
+static uint32_t g_uvc_health_last_enc_fail_count;
+static uint32_t g_uvc_health_last_drop_busy_count;
+static uint32_t g_uvc_health_last_show_req_count;
+static uint32_t g_uvc_health_last_show_ok_count;
+static uint32_t g_uvc_health_last_show_fail_count;
+static uint32_t g_uvc_health_last_frame_release_count;
+static uint32_t g_uvc_health_last_bringup_submit_count;
+static uint32_t g_uvc_health_last_pipe1_completed_seq;
+static uint32_t g_enc_dump_last_ms;
+static uint32_t g_enc_bs_ok_count;
+static uint32_t g_enc_bs_bad_count;
+static uint32_t g_enc_bs_last_ok_count;
+static uint32_t g_enc_bs_last_bad_count;
+static uint32_t g_uvc_tx_last_log_ms;
+static uint32_t g_uvc_tx_submit_id;
+static uint32_t g_uvc_tx_release_id;
+static uint32_t g_uvc_tx_last_submit_len;
+static uint32_t g_uvc_tx_last_submit_sig;
+static uint32_t g_uvc_tx_last_release_sig;
+static uint32_t g_uvc_tx_ptr_mismatch_count;
+static uint32_t g_uvc_tx_sig_mismatch_count;
+static uintptr_t g_uvc_tx_last_release_ptr;
+static uint32_t g_uvc_stream_session_id;
+static uint32_t g_uvc_stream_start_tick_ms;
+static int uvc_is_active;
+static volatile int buffer_flying;
 
 /* Forward declarations: used by early debug dump helper before full definitions below. */
 static uint8_t capture_buffer[CAPTURE_BUFFER_NB][VENC_MAX_WIDTH * VENC_MAX_HEIGHT * CAPTURE_BPP];
@@ -288,7 +390,7 @@ static void app_dump_pipe1_frame_data_1s(void)
   }
 
   now_ms = HAL_GetTick();
-  if ((now_ms - g_pipe1_dump_last_ms) < 1000U)
+  if ((now_ms - g_pipe1_dump_last_ms) < APP_PIPE1_FRAME_DUMP_PERIOD_MS)
   {
     return;
   }
@@ -328,14 +430,34 @@ static void app_dump_pipe1_frame_data_1s(void)
 
 static void app_log_cam_health_1s(void)
 {
+#if !APP_CAM_HEALTH_LOG_ENABLE
+  return;
+#else
   uint32_t now_ms = HAL_GetTick();
+  uint32_t cmsr2 = 0U;
+  uint32_t cmier = 0U;
+  uint32_t err = 0U;
+  uint32_t p1_state = 0U;
+  uint32_t p1_ovr_flag = 0U;
+  uint32_t p1_ovr_irq_en = 0U;
+  DCMIPP_HandleTypeDef *hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
 
   if ((now_ms - g_cam_health_last_ms) < 1000U)
   {
     return;
   }
 
-    printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu)\r\n",
+  if ((hdcmipp != NULL) && (hdcmipp->Instance != NULL))
+  {
+    cmsr2 = READ_REG(hdcmipp->Instance->CMSR2);
+    cmier = READ_REG(hdcmipp->Instance->CMIER);
+    err = hdcmipp->ErrorCode;
+    p1_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE1);
+    p1_ovr_flag = ((cmsr2 & DCMIPP_FLAG_PIPE1_OVR) != 0U) ? 1U : 0U;
+    p1_ovr_irq_en = ((cmier & DCMIPP_IT_PIPE1_OVR) != 0U) ? 1U : 0U;
+  }
+
+    printf("[CAM][HEALTH] 1s p1_frame=+%lu p2_frame=+%lu p1_vsync=+%lu rearm_ok=%lu rearm_fail=%lu err0=+%lu err1=+%lu err2=+%lu tot_err=(%lu,%lu,%lu) p1_state=%lu err=0x%08lX p1_ovrf=%lu p1_ovrie=%lu probe_ok=%lu probe_re=%lu auto_rec=%lu\r\n",
          (unsigned long)(g_pipe1_frame_irq_count - g_cam_health_last_pipe1_frame),
          (unsigned long)(g_pipe2_frame_irq_count - g_cam_health_last_pipe2_frame),
          (unsigned long)(g_pipe1_vsync_irq_count - g_cam_health_last_pipe1_vsync),
@@ -346,7 +468,14 @@ static void app_log_cam_health_1s(void)
          (unsigned long)(g_pipe_error_irq_count[2] - g_cam_health_last_pipe_err[2]),
          (unsigned long)g_pipe_error_irq_count[0],
          (unsigned long)g_pipe_error_irq_count[1],
-         (unsigned long)g_pipe_error_irq_count[2]);
+         (unsigned long)g_pipe_error_irq_count[2],
+         (unsigned long)p1_state,
+         (unsigned long)err,
+         (unsigned long)p1_ovr_flag,
+         (unsigned long)p1_ovr_irq_en,
+         (unsigned long)g_pipe_error_probe_clear_ok_count,
+         (unsigned long)g_pipe_error_probe_reassert_count,
+         (unsigned long)g_pipe_error_auto_recover_count);
 
   g_cam_health_last_ms = now_ms;
   g_cam_health_last_pipe1_frame = g_pipe1_frame_irq_count;
@@ -355,6 +484,390 @@ static void app_log_cam_health_1s(void)
   g_cam_health_last_pipe_err[0] = g_pipe_error_irq_count[0];
   g_cam_health_last_pipe_err[1] = g_pipe_error_irq_count[1];
   g_cam_health_last_pipe_err[2] = g_pipe_error_irq_count[2];
+#endif
+}
+
+static void app_log_dcmipp_error_poll_1s(void)
+{
+#if !APP_DCMIPP_ERR_POLL_ENABLE
+  return;
+#else
+  uint32_t now_ms = HAL_GetTick();
+  DCMIPP_HandleTypeDef *hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
+  uint32_t cmsr2;
+  uint32_t cmier;
+  uint32_t err;
+  uint32_t p1_state;
+  uint32_t p1_ovrf;
+  uint32_t p1_ovrie;
+  uint32_t p1_ovrerr;
+  uint32_t cmsr2_after;
+  uint32_t p1_ovrf_after;
+  int changed;
+  int has_error;
+
+  if ((now_ms - g_pipe_error_poll_last_ms) < APP_DCMIPP_ERR_POLL_PERIOD_MS)
+  {
+    return;
+  }
+  g_pipe_error_poll_last_ms = now_ms;
+
+  if ((hdcmipp == NULL) || (hdcmipp->Instance == NULL))
+  {
+    return;
+  }
+
+  cmsr2 = READ_REG(hdcmipp->Instance->CMSR2);
+  cmier = READ_REG(hdcmipp->Instance->CMIER);
+  err = hdcmipp->ErrorCode;
+  p1_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE1);
+  p1_ovrf = ((cmsr2 & DCMIPP_FLAG_PIPE1_OVR) != 0U) ? 1U : 0U;
+  p1_ovrie = ((cmier & DCMIPP_IT_PIPE1_OVR) != 0U) ? 1U : 0U;
+  p1_ovrerr = ((err & HAL_DCMIPP_ERROR_PIPE1_OVR) != 0U) ? 1U : 0U;
+  has_error = (p1_ovrf != 0U) || (p1_ovrerr != 0U) || (p1_state == HAL_DCMIPP_PIPE_STATE_ERROR);
+  changed = (err != g_pipe_error_poll_last_err) ||
+            (cmsr2 != g_pipe_error_poll_last_cmsr2) ||
+            (cmier != g_pipe_error_poll_last_cmier);
+
+  if (!has_error)
+  {
+    if (g_pipe_error_poll_was_active != 0U)
+    {
+      printf("[CAM][ERR][CLR] p1_state=%lu err=0x%08lX cmsr2=0x%08lX cmier=0x%08lX err_irq_tot=%lu\r\n",
+             (unsigned long)p1_state,
+             (unsigned long)err,
+             (unsigned long)cmsr2,
+             (unsigned long)cmier,
+             (unsigned long)g_pipe_error_irq_count[1]);
+    }
+    g_pipe_error_poll_was_active = 0U;
+    g_pipe_error_poll_last_hold_log_ms = 0U;
+  }
+  else
+  {
+    const char *tag = NULL;
+    if ((g_pipe_error_poll_was_active == 0U) || changed)
+    {
+      tag = "new";
+      g_pipe_error_poll_last_hold_log_ms = now_ms;
+    }
+    else if ((g_pipe_error_poll_last_hold_log_ms == 0U) ||
+             ((now_ms - g_pipe_error_poll_last_hold_log_ms) >= APP_DCMIPP_ERR_POLL_HOLD_LOG_PERIOD_MS))
+    {
+      tag = "hold";
+      g_pipe_error_poll_last_hold_log_ms = now_ms;
+    }
+
+    if (tag != NULL)
+    {
+      printf("[CAM][ERR][POLL] %s p1_state=%lu err=0x%08lX cmsr2=0x%08lX cmier=0x%08lX p1_ovrf=%lu p1_ovrie=%lu p1_ovrerr=%lu err_irq_tot=%lu\r\n",
+             tag,
+             (unsigned long)p1_state,
+             (unsigned long)err,
+             (unsigned long)cmsr2,
+             (unsigned long)cmier,
+             (unsigned long)p1_ovrf,
+             (unsigned long)p1_ovrie,
+             (unsigned long)p1_ovrerr,
+             (unsigned long)g_pipe_error_irq_count[1]);
+    }
+    g_pipe_error_poll_was_active = 1U;
+  }
+
+#if APP_DCMIPP_ERR_PROBE_CLEAR_ENABLE
+  /* Probe path: when OVR IRQ is masked, clear OVR flag and check if it re-asserts.
+   * This distinguishes a sticky latched flag from a true continuous overrun condition. */
+  if ((p1_ovrf != 0U) && (p1_ovrie == 0U))
+  {
+    int do_probe_log;
+
+    __HAL_DCMIPP_CLEAR_FLAG(hdcmipp, DCMIPP_FLAG_PIPE1_OVR);
+    __DSB();
+    cmsr2_after = READ_REG(hdcmipp->Instance->CMSR2);
+    p1_ovrf_after = ((cmsr2_after & DCMIPP_FLAG_PIPE1_OVR) != 0U) ? 1U : 0U;
+    if (p1_ovrf_after == 0U)
+    {
+      g_pipe_error_probe_clear_ok_count++;
+    }
+    else
+    {
+      g_pipe_error_probe_reassert_count++;
+    }
+
+    do_probe_log = 0;
+    if (p1_ovrf_after != 0U)
+    {
+      do_probe_log = 1; /* important: flag re-asserted immediately */
+    }
+    else if ((g_pipe_error_probe_last_log_ms == 0U) ||
+             ((now_ms - g_pipe_error_probe_last_log_ms) >= APP_DCMIPP_ERR_PROBE_LOG_PERIOD_MS))
+    {
+      do_probe_log = 1; /* keep only periodic success probe logs */
+    }
+
+    if (do_probe_log != 0)
+    {
+      printf("[CAM][ERR][PROBE] clr_p1ovr before=1 after=%lu state=%lu err=0x%08lX cmsr2=0x%08lX->0x%08lX ok=%lu re=%lu\r\n",
+             (unsigned long)p1_ovrf_after,
+             (unsigned long)p1_state,
+             (unsigned long)err,
+             (unsigned long)cmsr2,
+             (unsigned long)cmsr2_after,
+             (unsigned long)g_pipe_error_probe_clear_ok_count,
+             (unsigned long)g_pipe_error_probe_reassert_count);
+      g_pipe_error_probe_last_log_ms = now_ms;
+    }
+  }
+#endif
+
+#if APP_DCMIPP_ERR_AUTO_RECOVER_ENABLE
+  /* If raw OVR flag is gone for several polls but HAL state/error are still latched,
+   * recover to BUSY and re-arm OVR IRQ to monitor new real errors. */
+  if ((p1_ovrf == 0U) && (p1_ovrerr != 0U))
+  {
+    g_pipe_error_stable_clear_polls++;
+  }
+  else
+  {
+    g_pipe_error_stable_clear_polls = 0U;
+  }
+
+  if ((g_pipe_error_stable_clear_polls >= APP_DCMIPP_ERR_AUTO_RECOVER_STABLE_POLLS) &&
+      (p1_state == HAL_DCMIPP_PIPE_STATE_ERROR))
+  {
+    __HAL_DCMIPP_CLEAR_FLAG(hdcmipp, DCMIPP_FLAG_PIPE1_OVR);
+    hdcmipp->ErrorCode &= ~HAL_DCMIPP_ERROR_PIPE1_OVR;
+    hdcmipp->PipeState[1] = HAL_DCMIPP_PIPE_STATE_BUSY;
+    __HAL_DCMIPP_ENABLE_IT(hdcmipp, DCMIPP_IT_PIPE1_OVR);
+    g_pipe_error_auto_recover_count++;
+    g_pipe_error_stable_clear_polls = 0U;
+    printf("[CAM][ERR][AUTO-RECOVER] pipe1 state->BUSY clear_err=0x%08lX rearm_ovr_irq=1 cnt=%lu\r\n",
+           (unsigned long)hdcmipp->ErrorCode,
+           (unsigned long)g_pipe_error_auto_recover_count);
+  }
+#endif
+
+  g_pipe_error_poll_last_err = err;
+  g_pipe_error_poll_last_cmsr2 = cmsr2;
+  g_pipe_error_poll_last_cmier = cmier;
+#endif
+}
+
+static void app_log_uvc_health_1s(void)
+{
+#if !APP_UVC_LOG_ENABLE
+  return;
+#else
+  uint32_t now_ms = HAL_GetTick();
+
+  if ((now_ms - g_uvc_health_last_ms) < 1000U)
+  {
+    return;
+  }
+
+  printf("[UVC][HEALTH] 1s active=%d flying=%d p1_seq=+%lu on=+%lu off=+%lu submit=+%lu enc_ok=+%lu enc_fail=+%lu drop=+%lu show_req=+%lu show_ok=+%lu show_fail=+%lu rel=+%lu last(enc=%d show_ret=%d len=%d idx=%d)\r\n",
+         uvc_is_active,
+         buffer_flying,
+         (unsigned long)(g_pipe1_completed_seq - g_uvc_health_last_pipe1_completed_seq),
+         (unsigned long)(g_uvc_stream_active_count - g_uvc_health_last_stream_active_count),
+         (unsigned long)(g_uvc_stream_inactive_count - g_uvc_health_last_stream_inactive_count),
+         (unsigned long)(g_uvc_bringup_submit_count - g_uvc_health_last_bringup_submit_count),
+         (unsigned long)(g_uvc_enc_ok_count - g_uvc_health_last_enc_ok_count),
+         (unsigned long)(g_uvc_enc_fail_count - g_uvc_health_last_enc_fail_count),
+         (unsigned long)(g_uvc_drop_busy_count - g_uvc_health_last_drop_busy_count),
+         (unsigned long)(g_uvc_show_req_count - g_uvc_health_last_show_req_count),
+         (unsigned long)(g_uvc_show_ok_count - g_uvc_health_last_show_ok_count),
+         (unsigned long)(g_uvc_show_fail_count - g_uvc_health_last_show_fail_count),
+         (unsigned long)(g_uvc_frame_release_count - g_uvc_health_last_frame_release_count),
+         g_uvc_last_enc_ret,
+         g_uvc_last_show_ret,
+         g_uvc_last_show_len,
+         g_uvc_last_submit_idx);
+
+  printf("[UVC][STATE] stream_on=%lu stream_off=%lu total_show_ok=%lu total_rel=%lu tx_sub=%lu tx_rel=%lu ptr_mis=%lu sig_mis=%lu sub_sig=%lu rel_sig=%lu\r\n",
+         (unsigned long)g_uvc_stream_active_count,
+         (unsigned long)g_uvc_stream_inactive_count,
+         (unsigned long)g_uvc_show_ok_count,
+         (unsigned long)g_uvc_frame_release_count,
+         (unsigned long)g_uvc_tx_submit_id,
+         (unsigned long)g_uvc_tx_release_id,
+         (unsigned long)g_uvc_tx_ptr_mismatch_count,
+         (unsigned long)g_uvc_tx_sig_mismatch_count,
+         (unsigned long)g_uvc_tx_last_submit_sig,
+         (unsigned long)g_uvc_tx_last_release_sig);
+
+  g_uvc_health_last_ms = now_ms;
+  g_uvc_health_last_stream_active_count = g_uvc_stream_active_count;
+  g_uvc_health_last_stream_inactive_count = g_uvc_stream_inactive_count;
+  g_uvc_health_last_enc_ok_count = g_uvc_enc_ok_count;
+  g_uvc_health_last_enc_fail_count = g_uvc_enc_fail_count;
+  g_uvc_health_last_drop_busy_count = g_uvc_drop_busy_count;
+  g_uvc_health_last_show_req_count = g_uvc_show_req_count;
+  g_uvc_health_last_show_ok_count = g_uvc_show_ok_count;
+  g_uvc_health_last_show_fail_count = g_uvc_show_fail_count;
+  g_uvc_health_last_frame_release_count = g_uvc_frame_release_count;
+  g_uvc_health_last_bringup_submit_count = g_uvc_bringup_submit_count;
+  g_uvc_health_last_pipe1_completed_seq = g_pipe1_completed_seq;
+#endif
+}
+
+static int app_h264_find_start_code(const uint8_t *bs, int len, int *sc_off, int *sc_len)
+{
+  int i;
+  int lim;
+
+  if ((bs == NULL) || (len < 4))
+  {
+    return 0;
+  }
+
+  lim = (len > 64) ? 64 : len;
+  for (i = 0; i <= (lim - 4); i++)
+  {
+    if ((bs[i] == 0x00U) && (bs[i + 1] == 0x00U))
+    {
+      if (bs[i + 2] == 0x01U)
+      {
+        *sc_off = i;
+        *sc_len = 3;
+        return 1;
+      }
+      if ((bs[i + 2] == 0x00U) && (bs[i + 3] == 0x01U))
+      {
+        *sc_off = i;
+        *sc_len = 4;
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
+static void app_log_encoded_data_1s(const uint8_t *bs, int len)
+{
+#if APP_ENC_DUMP_ENABLE
+  uint32_t now_ms;
+  uint32_t sum = 0U;
+  uint8_t sample[8] = {0};
+  int sc_off = -1;
+  int sc_len = 0;
+  int nal_type = -1;
+  int sum_bytes;
+  int i;
+  int valid = 0;
+
+  if ((bs != NULL) && (len > 0) && (len <= (int)VENC_OUT_BUFFER_SIZE))
+  {
+    if (app_h264_find_start_code(bs, len, &sc_off, &sc_len))
+    {
+      int nal_idx = sc_off + sc_len;
+      if (nal_idx < len)
+      {
+        nal_type = (int)(bs[nal_idx] & 0x1FU);
+        /* Valid single-byte NAL header type for H.264 stream payload */
+        valid = (nal_type >= 1) && (nal_type <= 12);
+      }
+    }
+  }
+
+  if (valid)
+  {
+    g_enc_bs_ok_count++;
+  }
+  else
+  {
+    g_enc_bs_bad_count++;
+  }
+
+  now_ms = HAL_GetTick();
+  if ((now_ms - g_enc_dump_last_ms) < APP_ENC_DUMP_PERIOD_MS)
+  {
+    return;
+  }
+
+  if ((bs != NULL) && (len > 0))
+  {
+    int n = (len > 8) ? 8 : len;
+    sum_bytes = (len > APP_ENC_DUMP_SUM_BYTES) ? APP_ENC_DUMP_SUM_BYTES : len;
+
+    for (i = 0; i < n; i++)
+    {
+      sample[i] = bs[i];
+    }
+    for (i = 0; i < sum_bytes; i++)
+    {
+      sum += bs[i];
+    }
+  }
+  else
+  {
+    sum_bytes = 0;
+  }
+
+  printf("[ENC][H264] size=%d sc=%d/%d nal=%d b0..b7=%02X %02X %02X %02X %02X %02X %02X %02X sum%u=%lu ok=+%lu bad=+%lu tot=(%lu,%lu)\r\n",
+         len,
+         sc_off,
+         sc_len,
+         nal_type,
+         sample[0], sample[1], sample[2], sample[3],
+         sample[4], sample[5], sample[6], sample[7],
+         (unsigned int)sum_bytes,
+         (unsigned long)sum,
+         (unsigned long)(g_enc_bs_ok_count - g_enc_bs_last_ok_count),
+         (unsigned long)(g_enc_bs_bad_count - g_enc_bs_last_bad_count),
+         (unsigned long)g_enc_bs_ok_count,
+         (unsigned long)g_enc_bs_bad_count);
+
+  g_enc_bs_last_ok_count = g_enc_bs_ok_count;
+  g_enc_bs_last_bad_count = g_enc_bs_bad_count;
+  g_enc_dump_last_ms = now_ms;
+#else
+  (void)bs;
+  (void)len;
+#endif
+}
+
+static uint32_t app_sum_prefix_u32(const uint8_t *buf, int len, int max_len)
+{
+  uint32_t sum = 0U;
+  int n;
+  int i;
+
+  if ((buf == NULL) || (len <= 0) || (max_len <= 0))
+  {
+    return 0U;
+  }
+
+  n = (len < max_len) ? len : max_len;
+  for (i = 0; i < n; i++)
+  {
+    sum += buf[i];
+  }
+
+  return sum;
+}
+
+static void app_uvc_clean_dcache_for_show(uint8_t *buf, int len)
+{
+#if APP_UVC_CLEAN_DCACHE_BEFORE_SHOW
+  uintptr_t src_addr;
+  uintptr_t clean_addr;
+  uint32_t clean_len;
+
+  if (len <= 0)
+  {
+    return;
+  }
+
+  src_addr = (uintptr_t)buf;
+  clean_addr = src_addr & ~((uintptr_t)31U);
+  clean_len = ALIGN_VALUE((uint32_t)((src_addr - clean_addr) + (uintptr_t)len), 32U);
+  CACHE_OP(SCB_CleanDCache_by_Addr((uint8_t *)clean_addr, clean_len));
+#else
+  (void)buf;
+  (void)len;
+#endif
 }
 
 static void app_flush_cam_irq_logs(void)
@@ -395,14 +908,68 @@ static void app_flush_cam_irq_logs(void)
            g_pipe1_rearm_fail_last_capt_idx,
            g_pipe1_rearm_fail_last_next_idx);
   }
+
+#if APP_DCMIPP_ERR_LOG_ENABLE
+  if (g_pipe_error_pending_log != 0)
+  {
+    uint32_t now_ms = HAL_GetTick();
+    if ((g_pipe_error_last_log_ms == 0U) || ((now_ms - g_pipe_error_last_log_ms) >= APP_DCMIPP_ERR_LOG_PERIOD_MS))
+    {
+      uint32_t p1_ovr_flag = ((g_pipe_error_last_cmsr2 & DCMIPP_FLAG_PIPE1_OVR) != 0U) ? 1U : 0U;
+      uint32_t p1_ovr_irq_en = ((g_pipe_error_last_cmier & DCMIPP_IT_PIPE1_OVR) != 0U) ? 1U : 0U;
+      uint32_t p1_ovr_err = ((g_pipe_error_last_code & HAL_DCMIPP_ERROR_PIPE1_OVR) != 0U) ? 1U : 0U;
+      g_pipe_error_pending_log = 0;
+      g_pipe_error_last_log_ms = now_ms;
+      printf("[CAM][ERR] DCMIPP pipe=%lu state=%lu err=0x%08lX cmsr2=0x%08lX cmier=0x%08lX p1fctcr=0x%08lX ovrf=%lu ovrie=%lu ovrerr=%lu recov=%lu\r\n",
+             (unsigned long)g_pipe_error_last_pipe,
+             (unsigned long)g_pipe_error_last_state,
+             (unsigned long)g_pipe_error_last_code,
+             (unsigned long)g_pipe_error_last_cmsr2,
+             (unsigned long)g_pipe_error_last_cmier,
+             (unsigned long)g_pipe_error_last_p1fctcr,
+             (unsigned long)p1_ovr_flag,
+             (unsigned long)p1_ovr_irq_en,
+             (unsigned long)p1_ovr_err,
+             (unsigned long)g_pipe_error_soft_recover_count);
+    }
+  }
+#endif
 }
 
 void APP_CAM_DebugOnPipeError(uint32_t pipe)
 {
+  DCMIPP_HandleTypeDef *hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
+
   if (pipe < 3U)
   {
     g_pipe_error_irq_count[pipe]++;
   }
+
+  if ((hdcmipp != NULL) && (hdcmipp->Instance != NULL))
+  {
+    g_pipe_error_last_pipe = pipe;
+    g_pipe_error_last_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, pipe);
+    g_pipe_error_last_code = hdcmipp->ErrorCode;
+    g_pipe_error_last_cmsr2 = READ_REG(hdcmipp->Instance->CMSR2);
+    g_pipe_error_last_cmier = READ_REG(hdcmipp->Instance->CMIER);
+    g_pipe_error_last_p1fctcr = READ_REG(hdcmipp->Instance->P1FCTCR);
+
+#if APP_DCMIPP_ERR_SOFT_RECOVER
+    if ((pipe == DCMIPP_PIPE1) && ((hdcmipp->ErrorCode & HAL_DCMIPP_ERROR_PIPE1_OVR) != 0U))
+    {
+      /* HAL disables PIPE1 OVR IRQ after first hit; re-enable so we can monitor recurring errors. */
+      __HAL_DCMIPP_ENABLE_IT(hdcmipp, DCMIPP_IT_PIPE1_OVR);
+      hdcmipp->ErrorCode &= ~HAL_DCMIPP_ERROR_PIPE1_OVR;
+      if (hdcmipp->PipeState[1] == HAL_DCMIPP_PIPE_STATE_ERROR)
+      {
+        hdcmipp->PipeState[1] = HAL_DCMIPP_PIPE_STATE_BUSY;
+      }
+      g_pipe_error_soft_recover_count++;
+    }
+#endif
+  }
+
+  g_pipe_error_pending_log = 1;
 }
 
 /* dma2d */
@@ -628,6 +1195,8 @@ static int app_main_pipe_frame_event(void)
   capture_buffer_disp_idx = next_disp_idx;
   capture_buffer_capt_idx = next_capt_idx;
   g_pipe1_rearm_ok_count++;
+  g_pipe1_last_completed_idx = completed_idx;
+  g_pipe1_completed_seq++;
 #if APP_PIPE1_FRAME_DUMP_ENABLE
   g_pipe1_dump_idx = completed_idx;
   g_pipe1_dump_pending = 1;
@@ -744,17 +1313,31 @@ static void nn_thread_fct(void *arg)
 static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
 {
   size_t res;
+  int enc_ret;
 
-  res = ENC_EncodeFrame(p_buffer, venc_out_buffer, VENC_OUT_BUFFER_SIZE, is_intra_force);
-  /* usb is lagging, drop frame and force next to be an Intra */
-  if ((int)res > 0 && buffer_flying) {
+  /* USB has not released previous frame yet: skip encode to avoid extra PSRAM/AXI pressure. */
+  if (buffer_flying)
+  {
+    g_uvc_drop_busy_count++;
+    g_uvc_last_enc_ret = -2;
     force_intra = 1;
-    return -1;
+    return (size_t)-1;
   }
 
+  res = ENC_EncodeFrame(p_buffer, venc_out_buffer, VENC_OUT_BUFFER_SIZE, is_intra_force);
+  enc_ret = (int)res;
+
   /* encoder failed certainly due to output buffer too small */
-  if ((int)res <= 0)
+  if (enc_ret <= 0)
+  {
+    g_uvc_enc_fail_count++;
+    g_uvc_last_enc_ret = enc_ret;
     return res;
+  }
+
+  g_uvc_enc_ok_count++;
+  g_uvc_last_enc_ret = enc_ret;
+  app_log_encoded_data_1s(venc_out_buffer, enc_ret);
 
   memcpy(&uvc_in_buffers, venc_out_buffer, res);
 
@@ -764,13 +1347,84 @@ static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
 static int send_display(int len)
 {
   int ret;
+  uint32_t sig;
+#if APP_UVC_TX_DEBUG_ENABLE
+  uint32_t now_ms;
+#endif
 
+  g_uvc_show_req_count++;
+  g_uvc_tx_submit_id++;
+  g_uvc_tx_last_submit_len = (uint32_t)len;
+  sig = app_sum_prefix_u32(uvc_in_buffers, len, APP_UVC_TX_SIG_BYTES);
+  g_uvc_tx_last_submit_sig = sig;
+  app_uvc_clean_dcache_for_show(uvc_in_buffers, len);
+#if APP_UVC_TX_DEBUG_ENABLE
+  now_ms = HAL_GetTick();
+  if ((now_ms - g_uvc_tx_last_log_ms) >= APP_UVC_TX_DEBUG_PERIOD_MS)
+  {
+    printf("[UVC][TX] submit id=%lu len=%d ptr=0x%08lX sig%u=%lu clean=%d\r\n",
+           (unsigned long)g_uvc_tx_submit_id,
+           len,
+           (unsigned long)uvc_in_buffers,
+           APP_UVC_TX_SIG_BYTES,
+           (unsigned long)g_uvc_tx_last_submit_sig,
+           APP_UVC_CLEAN_DCACHE_BEFORE_SHOW);
+    g_uvc_tx_last_log_ms = now_ms;
+  }
+#endif
   buffer_flying = 1;
   ret = UVCL_ShowFrame(uvc_in_buffers, len);
   if (ret != 0)
+  {
     buffer_flying = 0;
+    g_uvc_show_fail_count++;
+  }
+  else
+  {
+    g_uvc_show_ok_count++;
+  }
+  g_uvc_last_show_ret = ret;
+  g_uvc_last_show_len = len;
 
   return ret;
+}
+
+static void app_uvc_try_send_pipe1_bringup(void)
+{
+#if APP_DVP_BRINGUP_PIPE1_ONLY
+  static uint32_t last_seq;
+  int idx;
+  int len;
+  uint32_t seq;
+
+  if (!uvc_is_active)
+  {
+    return;
+  }
+
+  seq = g_pipe1_completed_seq;
+  if (seq == last_seq)
+  {
+    return;
+  }
+  last_seq = seq;
+
+  idx = g_pipe1_last_completed_idx;
+  if ((idx < 0) || (idx >= CAPTURE_BUFFER_NB))
+  {
+    return;
+  }
+
+  g_uvc_bringup_submit_count++;
+  g_uvc_last_submit_idx = idx;
+
+  len = (int)encode_display(force_intra, capture_buffer[idx]);
+  if (len > 0)
+  {
+    (void)send_display(len);
+    force_intra = 0;
+  }
+#endif
 }
 
 static int build_display_inference_info(uint8_t *p_buffer, uint32_t inf_time, int line_nb)
@@ -1019,28 +1673,127 @@ static void isp_thread_fct(void *arg)
       CAM_IspUpdate();
     }
 
+#if APP_DVP_BRINGUP_PIPE1_ONLY
+    app_uvc_try_send_pipe1_bringup();
+#endif
     app_flush_cam_irq_logs();
     app_log_cam_health_1s();
+    app_log_dcmipp_error_poll_1s();
+    app_log_uvc_health_1s();
     app_dump_pipe1_frame_data_1s();
   }
 }
 
 static void app_uvc_streaming_active(struct uvcl_callbacks *cbs, UVCL_StreamConf_t stream)
 {
+  uint32_t now_ms = HAL_GetTick();
+  DCMIPP_HandleTypeDef *hdcmipp = CMW_CAMERA_GetDCMIPPHandle();
+
+  (void)cbs;
   uvc_is_active = 1;
+  g_uvc_stream_active_count++;
+  g_uvc_stream_session_id++;
+  g_uvc_stream_start_tick_ms = now_ms;
   BSP_LED_On(LED_RED);
+#if APP_UVC_CB_LOG_ENABLE
+  printf("[UVC][START] session=%lu tick_ms=%lu cfg=%dx%d@%d payload=%d on=%lu off=%lu\r\n",
+         (unsigned long)g_uvc_stream_session_id,
+         (unsigned long)now_ms,
+         stream.width, stream.height, stream.fps, stream.payload_type,
+         (unsigned long)g_uvc_stream_active_count,
+         (unsigned long)g_uvc_stream_inactive_count);
+#elif APP_UVC_LOG_ENABLE
+  printf("[UVC] streaming active %dx%d@%d payload=%d\r\n",
+         stream.width, stream.height, stream.fps, stream.payload_type);
+#else
+  (void)stream;
+#endif
+
+  if ((hdcmipp != NULL) && (hdcmipp->Instance != NULL))
+  {
+    uint32_t cmsr2 = READ_REG(hdcmipp->Instance->CMSR2);
+    uint32_t cmier = READ_REG(hdcmipp->Instance->CMIER);
+    uint32_t err = hdcmipp->ErrorCode;
+    uint32_t p1_state = HAL_DCMIPP_PIPE_GetState(hdcmipp, DCMIPP_PIPE1);
+    printf("[CAM][ERR][SNAP][UVC-START] p1_state=%lu err=0x%08lX cmsr2=0x%08lX cmier=0x%08lX p1_ovrf=%lu p1_ovrie=%lu p1_ovrerr=%lu\r\n",
+           (unsigned long)p1_state,
+           (unsigned long)err,
+           (unsigned long)cmsr2,
+           (unsigned long)cmier,
+           (unsigned long)(((cmsr2 & DCMIPP_FLAG_PIPE1_OVR) != 0U) ? 1U : 0U),
+           (unsigned long)(((cmier & DCMIPP_IT_PIPE1_OVR) != 0U) ? 1U : 0U),
+           (unsigned long)(((err & HAL_DCMIPP_ERROR_PIPE1_OVR) != 0U) ? 1U : 0U));
+  }
 }
 
 static void app_uvc_streaming_inactive(struct uvcl_callbacks *cbs)
 {
+  uint32_t now_ms = HAL_GetTick();
+  uint32_t dur_ms = now_ms - g_uvc_stream_start_tick_ms;
+
+  (void)cbs;
   uvc_is_active = 0;
+  g_uvc_stream_inactive_count++;
   BSP_LED_Off(LED_RED);
+#if APP_UVC_CB_LOG_ENABLE
+  printf("[UVC][STOP] session=%lu tick_ms=%lu dur_ms=%lu flying=%d on=%lu off=%lu show_ok=%lu rel=%lu\r\n",
+         (unsigned long)g_uvc_stream_session_id,
+         (unsigned long)now_ms,
+         (unsigned long)dur_ms,
+         buffer_flying,
+         (unsigned long)g_uvc_stream_active_count,
+         (unsigned long)g_uvc_stream_inactive_count,
+         (unsigned long)g_uvc_show_ok_count,
+         (unsigned long)g_uvc_frame_release_count);
+#elif APP_UVC_LOG_ENABLE
+  printf("[UVC] streaming inactive flying=%d show_ok=%lu rel=%lu\r\n",
+         buffer_flying,
+         (unsigned long)g_uvc_show_ok_count,
+         (unsigned long)g_uvc_frame_release_count);
+#endif
 }
 
 static void app_uvc_frame_release(struct uvcl_callbacks *cbs, void *frame)
 {
-  assert(buffer_flying);
+  uint32_t sig;
 
+  if (!buffer_flying)
+  {
+#if APP_UVC_LOG_ENABLE
+    printf("[UVC][WARN] frame_release while no frame flying frame=0x%08lX\r\n", (unsigned long)frame);
+#else
+    (void)cbs;
+    (void)frame;
+#endif
+    return;
+  }
+
+  g_uvc_tx_release_id++;
+  g_uvc_tx_last_release_ptr = (uintptr_t)frame;
+  sig = app_sum_prefix_u32(uvc_in_buffers, (int)g_uvc_tx_last_submit_len, APP_UVC_TX_SIG_BYTES);
+  g_uvc_tx_last_release_sig = sig;
+  if ((uintptr_t)frame != (uintptr_t)uvc_in_buffers)
+  {
+    g_uvc_tx_ptr_mismatch_count++;
+#if APP_UVC_LOG_ENABLE
+    printf("[UVC][TX][WARN] release ptr mismatch got=0x%08lX exp=0x%08lX cnt=%lu\r\n",
+           (unsigned long)frame,
+           (unsigned long)uvc_in_buffers,
+           (unsigned long)g_uvc_tx_ptr_mismatch_count);
+#endif
+  }
+  if (g_uvc_tx_last_release_sig != g_uvc_tx_last_submit_sig)
+  {
+    g_uvc_tx_sig_mismatch_count++;
+#if APP_UVC_LOG_ENABLE
+    printf("[UVC][TX][WARN] release sig mismatch sub=%lu rel=%lu len=%lu cnt=%lu\r\n",
+           (unsigned long)g_uvc_tx_last_submit_sig,
+           (unsigned long)g_uvc_tx_last_release_sig,
+           (unsigned long)g_uvc_tx_last_submit_len,
+           (unsigned long)g_uvc_tx_sig_mismatch_count);
+#endif
+  }
+  g_uvc_frame_release_count++;
   buffer_flying = 0;
 }
 
@@ -1127,6 +1880,20 @@ void app_run()
   enc_conf.width = VENC_WIDTH;
   enc_conf.height = VENC_HEIGHT;
   enc_conf.fps = CAMERA_FPS;
+#if (CAPTURE_FORMAT == DCMIPP_PIXEL_PACKER_FORMAT_YUV422_1)
+  enc_conf.input_type = ENC_INPUT_YUV422_YUYV;
+#elif (CAPTURE_FORMAT == DCMIPP_PIXEL_PACKER_FORMAT_YUV422_1_UYVY)
+  enc_conf.input_type = ENC_INPUT_YUV422_UYVY;
+#else
+  enc_conf.input_type = ENC_INPUT_RGB888;
+#endif
+  printf("[APP] enc cfg %dx%d@%d input_type=%d cap_fmt=%d bpp=%d\r\n",
+         enc_conf.width,
+         enc_conf.height,
+         enc_conf.fps,
+         (int)enc_conf.input_type,
+         (int)CAPTURE_FORMAT,
+         CAPTURE_BPP);
   ENC_Init(&enc_conf);
 
   /* Uvc init */
@@ -1140,6 +1907,7 @@ void app_run()
   uvcl_cbs.streaming_inactive = app_uvc_streaming_inactive;
   uvcl_cbs.frame_release = app_uvc_frame_release;
   ret = UVCL_Init(USB1_OTG_HS, &uvcl_conf, &uvcl_cbs);
+#if APP_UVC_LOG_ENABLE
   if (ret == 0)
   {
     printf("[UVC] UVCL_Init OK (USB1_OTG_HS)\r\n");
@@ -1148,6 +1916,7 @@ void app_run()
   {
     printf("[UVC][ERR] UVCL_Init failed ret=%d\r\n", ret);
   }
+#endif
 
   /* sems + mutex init */
   isp_sem = xSemaphoreCreateCountingStatic(1, 0, &isp_sem_buffer);
@@ -1165,6 +1934,9 @@ void app_run()
   /* threads init */
 #if APP_DVP_BRINGUP_PIPE1_ONLY
   printf("[CAM] bring-up mode enabled: NN/PIPE2 and DP threads are skipped\r\n");
+#if APP_UVC_LOG_ENABLE
+  printf("[UVC] bring-up mode: direct pipe1->ENC->UVCL path enabled in ISP thread\r\n");
+#endif
 #else
   hdl = xTaskCreateStatic(nn_thread_fct, "nn", configMINIMAL_STACK_SIZE * 2, NULL, nn_priority, nn_thread_stack,
                           &nn_thread);

@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "h264encapi.h"
 #include "jpegencapi.h"
@@ -43,6 +44,23 @@ static struct VENC_Context {
   uint64_t pic_cnt;
   int gop_len;
 } VENC_Instance;
+
+static H264EncPictureType VENC_SelectInputType(ENC_InputType_t input_type, const char **name)
+{
+  switch (input_type)
+  {
+  case ENC_INPUT_YUV422_YUYV:
+    *name = "YUV422_YUYV";
+    return H264ENC_YUV422_INTERLEAVED_YUYV;
+  case ENC_INPUT_YUV422_UYVY:
+    *name = "YUV422_UYVY";
+    return H264ENC_YUV422_INTERLEAVED_UYVY;
+  case ENC_INPUT_RGB888:
+  default:
+    *name = "RGB888";
+    return H264ENC_RGB888;
+  }
+}
 
 static void VENC_SetupConstantQp(H264EncRateCtrl *rate, int qp)
 {
@@ -194,6 +212,7 @@ void ENC_Init(ENC_Conf_t *p_conf)
   H264EncConfig config;
   H264EncRateCtrl rate;
   int target_bitrate;
+  const char *input_name;
   int ret;
 
   memset(&config, 0, sizeof(config));
@@ -213,9 +232,10 @@ void ENC_Init(ENC_Conf_t *p_conf)
   /* setup source format */
   ret = H264EncGetPreProcessing(p_ctx->hdl, &cfg);
   assert(ret == H264ENC_OK);
-  cfg.inputType = H264ENC_RGB888;
+  cfg.inputType = VENC_SelectInputType(p_conf->input_type, &input_name);
   ret = H264EncSetPreProcessing(p_ctx->hdl, &cfg);
   assert(ret == H264ENC_OK);
+  printf("[ENC] cfg input=%s (%d)\r\n", input_name, (int)cfg.inputType);
 
   /* setup coding ctrl */
   ret = H264EncGetCodingCtrl(p_ctx->hdl, &ctrl);

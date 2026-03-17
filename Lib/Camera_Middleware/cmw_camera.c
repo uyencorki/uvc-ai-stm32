@@ -78,6 +78,7 @@ static void CMW_CAMERA_EnableGPIOs(void);
 static void CMW_CAMERA_PwrDown(void);
 static int32_t CMW_CAMERA_SetPipe(DCMIPP_HandleTypeDef *hdcmipp, uint32_t pipe, CMW_DCMIPP_Conf_t *p_conf, uint32_t *pitch);
 static int CMW_CAMERA_Probe_Sensor(CMW_Sensor_Init_t *initValues, CMW_Sensor_Name_t *sensorName);
+static int CMW_CAMERA_IsSensorYuvFormat(uint32_t pixel_format);
 static uint32_t CMW_CAMERA_ClampDvpCase(uint32_t case_id);
 static void CMW_CAMERA_GetDvpCasePolarityFlags(uint32_t case_id, uint32_t *vs_high, uint32_t *hs_high, uint32_t *pck_rising);
 static void CMW_CAMERA_FillParallelConfigByCase(DCMIPP_ParallelConfTypeDef *parallel_conf, uint32_t case_id);
@@ -1008,6 +1009,20 @@ static void CMW_CAMERA_FillParallelConfigByCase(DCMIPP_ParallelConfTypeDef *para
   parallel_conf->SwapCycles = DCMIPP_SWAPCYCLES_DISABLE;
 }
 
+static int CMW_CAMERA_IsSensorYuvFormat(uint32_t pixel_format)
+{
+  switch (pixel_format)
+  {
+    case CMW_PIXEL_FORMAT_YUV420_8:
+    case CMW_PIXEL_FORMAT_YUV420_10:
+    case CMW_PIXEL_FORMAT_YUV422_8:
+    case CMW_PIXEL_FORMAT_YUV422_10:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 
 static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
 {
@@ -1024,7 +1039,12 @@ static int32_t CMW_CAMERA_DVP_Init(CMW_Sensor_Init_t *initSensors_params)
   default_sensor_config.pixel_format = CMW_PIXEL_FORMAT_YUV422_8;
   initSensors_params->sensor_config = initSensors_params->sensor_config ? initSensors_params->sensor_config : &default_sensor_config;
   sensor_config = (CMW_DVP_config_t *)(initSensors_params->sensor_config);
+  Camera_Ctx.pixel_format = sensor_config->pixel_format;
   printf("[CMW] sensor pixel_format=%lu\r\n", (unsigned long)sensor_config->pixel_format);
+  if (CMW_CAMERA_IsSensorYuvFormat(sensor_config->pixel_format))
+  {
+    printf("[CMW] sensor output is YUV: STM32 ISP/YUV conversion will be bypassed\r\n");
+  }
 
   if ((initSensors_params->width == 0U) || (initSensors_params->height == 0U))
   {
@@ -1223,24 +1243,38 @@ static int32_t CMW_CAMERA_SetPipe(DCMIPP_HandleTypeDef *hdcmipp, uint32_t pipe, 
       return CMW_ERROR_FEATURE_NOT_SUPPORTED;
     }
 
-    #define N10(val) (((val) ^ 0x7FF) + 1)
-    DCMIPP_ColorConversionConfTypeDef yuv_color_conf = {
-    .ClampOutputSamples = ENABLE,
-    .OutputSamplesType = 0,
-    .RR = 131,     .RG = N10(110), .RB = N10(21), .RA = 128,
-    .GR = 77,      .GG = 150,      .GB = 29,      .GA = 0,
-    .BR = N10(44), .BG = N10(87),  .BB = 131,     .BA = 128,
-    };
-
-    ret = HAL_DCMIPP_PIPE_SetYUVConversionConfig(hdcmipp, pipe, &yuv_color_conf);
-    if (ret != HAL_OK)
+    if (CMW_CAMERA_IsSensorYuvFormat(Camera_Ctx.pixel_format))
     {
-      return CMW_ERROR_COMPONENT_FAILURE;
+      ret = HAL_DCMIPP_PIPE_DisableYUVConversion(hdcmipp, pipe);
+      if (ret != HAL_OK)
+      {
+        return CMW_ERROR_COMPONENT_FAILURE;
+      }
+      printf("[CMW] pipe%lu YUV conversion bypassed (sensor fmt=%lu)\r\n",
+             (unsigned long)pipe,
+             (unsigned long)Camera_Ctx.pixel_format);
     }
-    ret = HAL_DCMIPP_PIPE_EnableYUVConversion(hdcmipp, pipe);
-    if (ret != HAL_OK)
+    else
     {
-      return CMW_ERROR_COMPONENT_FAILURE;
+      #define N10(val) (((val) ^ 0x7FF) + 1)
+      DCMIPP_ColorConversionConfTypeDef yuv_color_conf = {
+      .ClampOutputSamples = ENABLE,
+      .OutputSamplesType = 0,
+      .RR = 131,     .RG = N10(110), .RB = N10(21), .RA = 128,
+      .GR = 77,      .GG = 150,      .GB = 29,      .GA = 0,
+      .BR = N10(44), .BG = N10(87),  .BB = 131,     .BA = 128,
+      };
+
+      ret = HAL_DCMIPP_PIPE_SetYUVConversionConfig(hdcmipp, pipe, &yuv_color_conf);
+      if (ret != HAL_OK)
+      {
+        return CMW_ERROR_COMPONENT_FAILURE;
+      }
+      ret = HAL_DCMIPP_PIPE_EnableYUVConversion(hdcmipp, pipe);
+      if (ret != HAL_OK)
+      {
+        return CMW_ERROR_COMPONENT_FAILURE;
+      }
     }
   }
 

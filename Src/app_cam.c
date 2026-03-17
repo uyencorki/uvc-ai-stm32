@@ -328,6 +328,12 @@ static void DCMIPP_PipeInitDisplay(int sensor_width, int sensor_height)
   ret = HAL_DCMIPP_PIPE_SetConfig(hdcmipp, DCMIPP_PIPE1, &pipe_conf);
   assert(ret == HAL_OK);
 
+  /* PX9210 outputs YUV already; bypass additional ISP conversions on STM32 side. */
+  ret = HAL_DCMIPP_PIPE_DisableYUVConversion(hdcmipp, DCMIPP_PIPE1);
+  assert(ret == HAL_OK);
+  ret = HAL_DCMIPP_PIPE_DisableGammaConversion(hdcmipp, DCMIPP_PIPE1);
+  assert(ret == HAL_OK);
+
   crop_conf.VSize = (sensor_height > (int)out_height) ? out_height : (uint32_t)sensor_height;
   crop_conf.HSize = (sensor_width > (int)out_width) ? out_width : (uint32_t)sensor_width;
   crop_conf.VStart = ((uint32_t)sensor_height - crop_conf.VSize) / 2U;
@@ -348,6 +354,7 @@ static void DCMIPP_PipeInitDisplay(int sensor_width, int sensor_height)
          (unsigned long)crop_conf.VStart,
          (unsigned long)crop_conf.HSize,
          (unsigned long)crop_conf.VSize);
+  printf("[CAM] pipe1 ISP bypass: YUV conversion OFF, gamma OFF\r\n");
 }
 
 static void DCMIPP_PipeInitNn(int sensor_width, int sensor_height)
@@ -521,9 +528,7 @@ int CAM_GetVencHeight()
 
 void CMW_CAMERA_PIPE_ErrorCallback(uint32_t pipe)
 {
-  printf("[CAM][ERR] DCMIPP pipe error pipe=%lu state=%lu\r\n",
-         (unsigned long)pipe,
-         (unsigned long)HAL_DCMIPP_PIPE_GetState(CMW_CAMERA_GetDCMIPPHandle(), pipe));
+  /* ISR context: defer detailed logging to app thread to avoid UART blocking here. */
   APP_CAM_DebugOnPipeError(pipe);
   /* FIXME : Need to tune sensor/ipplug so we can remove this implementation */
 }
