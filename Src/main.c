@@ -28,6 +28,7 @@
 #include "stm32n6570_discovery_lcd.h"
 #include "stm32n6570_discovery_xspi.h"
 #include <stdio.h>
+#include <stdint.h>
 #include "stm32n6xx_hal_rif.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -57,6 +58,9 @@ static void IAC_Config();
 static void CONSOLE_Config(void);
 static void Setup_Mpu(void);
 static void PSRAM_DebugProbe(void);
+static void PSRAM_MMP_DebugProbe(void);
+static void PSRAM_FillPattern(uint8_t *dst, uint32_t len, uint32_t pattern_id);
+static int PSRAM_CompareAndLog(const char *tag, const uint8_t *wr, const uint8_t *rd, uint32_t len);
 static int main_freertos(void);
 static void main_thread_fct(void *arg);
 
@@ -329,13 +333,84 @@ static void DMA2D_Config()
   __HAL_RCC_DMA2D_RELEASE_RESET();
 }
 
+static void PSRAM_FillPattern(uint8_t *dst, uint32_t len, uint32_t pattern_id)
+{
+  uint32_t i;
+
+  if (dst == NULL)
+  {
+    return;
+  }
+
+  for (i = 0; i < len; i++)
+  {
+    switch (pattern_id)
+    {
+      case 0U: /* Incremental byte pattern: A0 A1 ... */
+        dst[i] = (uint8_t)(0xA0U + (uint8_t)i);
+        break;
+      case 1U: /* Alternating checkerboard bytes */
+        dst[i] = ((i & 1U) == 0U) ? 0x55U : 0xAAU;
+        break;
+      default: /* Walking bit */
+        dst[i] = (uint8_t)(1U << (i & 7U));
+        break;
+    }
+  }
+}
+
+static int PSRAM_CompareAndLog(const char *tag, const uint8_t *wr, const uint8_t *rd, uint32_t len)
+{
+  uint32_t i;
+  int mismatch = 0;
+  int first_idx = -1;
+  uint8_t first_wr = 0U;
+  uint8_t first_rd = 0U;
+
+  if ((tag == NULL) || (wr == NULL) || (rd == NULL))
+  {
+    return (int)len;
+  }
+
+  for (i = 0; i < len; i++)
+  {
+    if (wr[i] != rd[i])
+    {
+      if (first_idx < 0)
+      {
+        first_idx = (int)i;
+        first_wr = wr[i];
+        first_rd = rd[i];
+      }
+      mismatch++;
+    }
+  }
+
+  printf("[PSRAM][%s] wr=%02X %02X %02X %02X %02X %02X %02X %02X rd=%02X %02X %02X %02X %02X %02X %02X %02X mismatch=%d\r\n",
+         tag,
+         wr[0], wr[1], wr[2], wr[3], wr[4], wr[5], wr[6], wr[7],
+         rd[0], rd[1], rd[2], rd[3], rd[4], rd[5], rd[6], rd[7],
+         mismatch);
+
+  if (first_idx >= 0)
+  {
+    printf("[PSRAM][%s] first_mismatch i=%d wr=%02X rd=%02X xor=%02X\r\n",
+           tag, first_idx, first_wr, first_rd, (uint8_t)(first_wr ^ first_rd));
+  }
+
+  return mismatch;
+}
+
 static void PSRAM_DebugProbe(void)
 {
+  static const char *pattern_name[3] = {"INC", "ALT55AA", "WALK1"};
   static const uint32_t probe_addr = 0x00100000U;
   uint8_t wr[16];
   uint8_t rd[16] = {0};
   int32_t ret;
-  int mismatch = 0;
+  int mismatch_total = 0;
+  int mismatch;
+  uint32_t p;
   int i;
 
   ret = BSP_XSPI_RAM_ReadID(0, g_psram_id);
@@ -343,40 +418,131 @@ static void PSRAM_DebugProbe(void)
   printf("[PSRAM] ReadID ret=%ld id=%02X %02X %02X %02X %02X %02X\r\n",
          (long)ret, g_psram_id[0], g_psram_id[1], g_psram_id[2], g_psram_id[3], g_psram_id[4], g_psram_id[5]);
 
-  for (i = 0; i < 16; i++)
+  for (p = 0U; p < 3U; p++)
   {
-    wr[i] = (uint8_t)(0xA0U + (uint8_t)i);
-  }
+    PSRAM_FillPattern(wr, sizeof(wr), p);
+    memset(rd, 0, sizeof(rd));
 
-  ret = BSP_XSPI_RAM_Write(0, wr, probe_addr, sizeof(wr));
-  g_psram_write_ret = (int)ret;
-  printf("[PSRAM] Write ret=%ld addr=0x%08lX len=%u\r\n",
-         (long)ret, (unsigned long)probe_addr, (unsigned)sizeof(wr));
-
-  ret = BSP_XSPI_RAM_Read(0, rd, probe_addr, sizeof(rd));
-  g_psram_read_ret = (int)ret;
-  printf("[PSRAM] Read ret=%ld addr=0x%08lX len=%u data=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-         (long)ret, (unsigned long)probe_addr, (unsigned)sizeof(rd),
-         rd[0], rd[1], rd[2], rd[3], rd[4], rd[5], rd[6], rd[7]);
-
-  for (i = 0; i < 8; i++)
-  {
-    g_psram_probe_rd8[i] = rd[i];
-  }
-
-  for (i = 0; i < 16; i++)
-  {
-    if (wr[i] != rd[i])
+    ret = BSP_XSPI_RAM_Write(0, wr, probe_addr, sizeof(wr));
+    if (p == 0U)
     {
-      if (mismatch == 0)
-      {
-        printf("[PSRAM] first_mismatch i=%d wr=%02X rd=%02X\r\n", i, wr[i], rd[i]);
-      }
-      mismatch++;
+      g_psram_write_ret = (int)ret;
     }
+    printf("[PSRAM][%s] Write ret=%ld addr=0x%08lX len=%u\r\n",
+           pattern_name[p], (long)ret, (unsigned long)probe_addr, (unsigned)sizeof(wr));
+    if (ret != BSP_ERROR_NONE)
+    {
+      mismatch_total += (int)sizeof(wr);
+      continue;
+    }
+
+    ret = BSP_XSPI_RAM_Read(0, rd, probe_addr, sizeof(rd));
+    if (p == 0U)
+    {
+      g_psram_read_ret = (int)ret;
+    }
+    printf("[PSRAM][%s] Read ret=%ld addr=0x%08lX len=%u\r\n",
+           pattern_name[p], (long)ret, (unsigned long)probe_addr, (unsigned)sizeof(rd));
+    if (ret != BSP_ERROR_NONE)
+    {
+      mismatch_total += (int)sizeof(rd);
+      continue;
+    }
+
+    if (p == 0U)
+    {
+      for (i = 0; i < 8; i++)
+      {
+        g_psram_probe_rd8[i] = rd[i];
+      }
+    }
+
+    mismatch = PSRAM_CompareAndLog(pattern_name[p], wr, rd, sizeof(wr));
+    mismatch_total += mismatch;
   }
-  g_psram_verify_mismatch = mismatch;
-  printf("[PSRAM] verify mismatch=%d\r\n", mismatch);
+
+  g_psram_verify_mismatch = mismatch_total;
+  printf("[PSRAM] verify mismatch(total)=%d\r\n", mismatch_total);
+}
+
+static void PSRAM_MMP_DebugProbe(void)
+{
+  static const char *pattern_name[3] = {"MMP-INC", "MMP-ALT55AA", "MMP-WALK1"};
+  static const uint32_t probe_addr = 0x00100000U;
+  volatile uint8_t *mmp = (volatile uint8_t *)(XSPI1_BASE + probe_addr);
+  uint8_t wr[16];
+  uint8_t rd[16];
+  uint8_t warm[8];
+  char retry_tag[24];
+  uintptr_t cache_addr;
+  int32_t cache_len;
+  int mismatch_total = 0;
+  int mismatch;
+  uint32_t p;
+  int i;
+
+  cache_addr = ((uintptr_t)mmp) & ~(uintptr_t)31U;
+  cache_len = 32;
+
+  printf("[PSRAM][MMP] base=0x%08lX probe=0x%08lX ptr=0x%08lX\r\n",
+         (unsigned long)XSPI1_BASE,
+         (unsigned long)probe_addr,
+         (unsigned long)(XSPI1_BASE + probe_addr));
+
+#if defined(USE_DCACHE)
+  SCB_InvalidateDCache_by_Addr((uint32_t *)cache_addr, cache_len);
+  __DSB();
+  __ISB();
+#endif
+  for (i = 0; i < (int)sizeof(warm); i++)
+  {
+    warm[i] = mmp[i];
+  }
+  printf("[PSRAM][MMP] warmup rd=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+         warm[0], warm[1], warm[2], warm[3], warm[4], warm[5], warm[6], warm[7]);
+
+  for (p = 0U; p < 3U; p++)
+  {
+    PSRAM_FillPattern(wr, sizeof(wr), p);
+
+    for (i = 0; i < (int)sizeof(wr); i++)
+    {
+      mmp[i] = wr[i];
+    }
+
+#if defined(USE_DCACHE)
+    /* Ensure writeback reaches XSPI memory and next read fetches fresh data. */
+    SCB_CleanDCache_by_Addr((uint32_t *)cache_addr, cache_len);
+    __DSB();
+    SCB_InvalidateDCache_by_Addr((uint32_t *)cache_addr, cache_len);
+    __DSB();
+    __ISB();
+#endif
+
+    for (i = 0; i < (int)sizeof(rd); i++)
+    {
+      rd[i] = mmp[i];
+    }
+
+    mismatch = PSRAM_CompareAndLog(pattern_name[p], wr, rd, sizeof(wr));
+    if (mismatch != 0)
+    {
+#if defined(USE_DCACHE)
+      SCB_InvalidateDCache_by_Addr((uint32_t *)cache_addr, cache_len);
+      __DSB();
+      __ISB();
+#endif
+      for (i = 0; i < (int)sizeof(rd); i++)
+      {
+        rd[i] = mmp[i];
+      }
+      (void)snprintf(retry_tag, sizeof(retry_tag), "%s-R", pattern_name[p]);
+      mismatch = PSRAM_CompareAndLog(retry_tag, wr, rd, sizeof(wr));
+    }
+    mismatch_total += mismatch;
+  }
+
+  printf("[PSRAM][MMP] verify mismatch(total)=%d\r\n", mismatch_total);
 }
 
 static int main_freertos()
@@ -434,6 +600,10 @@ static void main_thread_fct(void *arg)
     ret = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
     g_psram_mmp_ret = ret;
     printf("[PSRAM] MMP enable ret=%d\r\n", ret);
+    if (ret == BSP_ERROR_NONE)
+    {
+      PSRAM_MMP_DebugProbe();
+    }
   }
 
   BSP_XSPI_NOR_Init_t NOR_Init;

@@ -1193,7 +1193,7 @@ static int32_t XSPI_RAM_W958_WriteReg(uint32_t Instance, uint32_t RegIndex, uint
   sCommand.Address = RegIndex;
   sCommand.AddressWidth = HAL_XSPI_ADDRESS_32_BITS;
   sCommand.DataLength = 2U;
-  sCommand.DQSMode = HAL_XSPI_DQS_DISABLE;
+  sCommand.DQSMode = BSP_XSPI_RAM_W958_WRITE_DQS_MODE;
   sCommand.DataMode = BSP_XSPI_RAM_W958_REG_DATA_MODE;
 
   XSPI_RAM_LOG_CMD("[W958][CMD] WriteReg", sCommand.AddressSpace, sCommand.Address, sCommand.AddressWidth,
@@ -1308,8 +1308,8 @@ static int32_t XSPI_RAM_W958_WriteMem(uint32_t Instance, uint8_t *pData, uint32_
   sCommand.Address = WriteAddr;
   sCommand.AddressWidth = HAL_XSPI_ADDRESS_32_BITS;
   sCommand.DataLength = Size;
-  /* On write path, keep RWDS disabled to avoid unintended byte-mask behavior. */
-  sCommand.DQSMode = HAL_XSPI_DQS_DISABLE;
+  /* RWDS/DQS mode is configurable to match board wiring and byte-mask behavior. */
+  sCommand.DQSMode = BSP_XSPI_RAM_W958_WRITE_DQS_MODE;
   sCommand.DataMode = BSP_XSPI_RAM_W958_MEM_DATA_MODE;
 
   XSPI_RAM_LOG_CMD("[W958][CMD] WriteMem", sCommand.AddressSpace, sCommand.Address, sCommand.AddressWidth,
@@ -1402,13 +1402,14 @@ int32_t BSP_XSPI_RAM_Init(uint32_t Instance)
       hb_cfg.AccessTimeCycle = BSP_XSPI_RAM_W958_ACCESS_CYCLES;
       hb_cfg.WriteZeroLatency = HAL_XSPI_LATENCY_ON_WRITE;
       hb_cfg.LatencyMode = HAL_XSPI_FIXED_LATENCY;
-      XSPI_RAM_LOG("[W958] hb_cfg trwr=%lu tacc=%lu write_lat=%lu lat_mode=%lu reg_dmode=%lu mem_dmode=%lu post_ps=%lu",
+      XSPI_RAM_LOG("[W958] hb_cfg trwr=%lu tacc=%lu write_lat=%lu lat_mode=%lu reg_dmode=%lu mem_dmode=%lu wr_dqs=%lu post_ps=%lu",
                    (unsigned long)hb_cfg.RWRecoveryTimeCycle,
                    (unsigned long)hb_cfg.AccessTimeCycle,
                    (unsigned long)hb_cfg.WriteZeroLatency,
                    (unsigned long)hb_cfg.LatencyMode,
                    (unsigned long)BSP_XSPI_RAM_W958_REG_DATA_MODE,
                    (unsigned long)BSP_XSPI_RAM_W958_MEM_DATA_MODE,
+                   (unsigned long)BSP_XSPI_RAM_W958_WRITE_DQS_MODE,
                    (unsigned long)BSP_XSPI_RAM_W958_POST_INIT_PRESCALER);
       if (HAL_XSPI_HyperbusCfg(&hxspi_ram[Instance], &hb_cfg, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
       {

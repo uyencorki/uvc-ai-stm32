@@ -123,6 +123,11 @@ extern "C" {
 #define BSP_XSPI_RAM_W958_MEM_DATA_MODE      HAL_XSPI_DATA_16_LINES
 #endif /* BSP_XSPI_RAM_W958_MEM_DATA_MODE */
 
+#ifndef BSP_XSPI_RAM_W958_WRITE_DQS_MODE
+/* Keep RWDS/DQS active on write path to avoid undefined byte-mask behavior. */
+#define BSP_XSPI_RAM_W958_WRITE_DQS_MODE     HAL_XSPI_DQS_ENABLE
+#endif /* BSP_XSPI_RAM_W958_WRITE_DQS_MODE */
+
 #ifndef BSP_XSPI_RAM_W958_DATA_MODE
 /* Backward-compatible alias used by existing code paths. */
 #define BSP_XSPI_RAM_W958_DATA_MODE          BSP_XSPI_RAM_W958_MEM_DATA_MODE
