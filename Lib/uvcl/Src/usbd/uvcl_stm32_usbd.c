@@ -170,6 +170,7 @@ static uint8_t USB_DISP_DataInImpl(USBD_HandleTypeDef *p_dev, int is_incomplete)
   UVCL_Ctx_t *p_ctx = UVCL_usbd_get_ctx_from_p_dev(p_dev);
   int packet_size = is_hs(p_dev) ? UVC_ISO_HS_MPS : UVC_ISO_FS_MPS;
   UVCL_OnFlyCtx_t *on_fly_ctx;
+  int is_last;
   int len;
 
   if (p_ctx->state != UVCL_STATUS_STREAMING)
@@ -187,6 +188,7 @@ static uint8_t USB_DISP_DataInImpl(USBD_HandleTypeDef *p_dev, int is_incomplete)
     p_ctx->on_fly_ctx = UVCL_StartNewFrameTransmission(p_ctx, packet_size);
 
   if (!p_ctx->on_fly_ctx) {
+    p_ctx->packet[1] &= 1U; /* keep FID only, clear EOF when no frame data */
     USBD_LL_Transmit(p_dev, 0x81, p_ctx->packet, 2);
 
     return USBD_OK;
@@ -195,7 +197,9 @@ static uint8_t USB_DISP_DataInImpl(USBD_HandleTypeDef *p_dev, int is_incomplete)
   /* Send next frame packet */
   on_fly_ctx = p_ctx->on_fly_ctx;
   //printf("S %d\n", on_fly_ctx->packet_index);
-  len = on_fly_ctx->packet_index == (on_fly_ctx->packet_nb - 1) ? on_fly_ctx->last_packet_size + 2 : packet_size;
+  is_last = (on_fly_ctx->packet_index == (on_fly_ctx->packet_nb - 1));
+  p_ctx->packet[1] = (uint8_t)((p_ctx->packet[1] & 1U) | (is_last ? 2U : 0U));
+  len = is_last ? (on_fly_ctx->last_packet_size + 2) : packet_size;
   memcpy(&p_ctx->packet[2], on_fly_ctx->cursor, len - 2);
   USBD_LL_Transmit(p_dev, 0x81, p_ctx->packet, len);
 

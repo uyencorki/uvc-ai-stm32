@@ -45,6 +45,7 @@
 /*------------------------------------------------------------------------------
     Include headers
 ------------------------------------------------------------------------------*/
+#include <stdio.h>
 #include "encpreprocess.h"
 #include "encasiccontroller.h"
 #include "enccommon.h"
@@ -113,6 +114,11 @@ i32 EncAsicMemAlloc_V2(asicData_s * asic, u32 width, u32 height,
     ASSERT(sizeof(encOutputMbInfo_s)%8 == 0);
 
     regs = &asic->regs;
+    printf("[ASICMEM] enter wh=%lux%lu scaled=%lux%lu type=%lu ref=%lu/%lu\r\n",
+           (unsigned long)width, (unsigned long)height,
+           (unsigned long)scaledWidth, (unsigned long)scaledHeight,
+           (unsigned long)encodingType,
+           (unsigned long)numRefBuffsLum, (unsigned long)numRefBuffsChr);
 
     regs->codingType = encodingType;
 
@@ -120,6 +126,8 @@ i32 EncAsicMemAlloc_V2(asicData_s * asic, u32 width, u32 height,
     height = (height + 15) / 16;
 
     mbTotal = width * height;
+    printf("[ASICMEM] mb wh=%lux%lu total=%lu\r\n",
+           (unsigned long)width, (unsigned long)height, (unsigned long)mbTotal);
 
     /* Allocate H.264 internal memories */
     if(regs->codingType != ASIC_JPEG)
@@ -133,28 +141,51 @@ i32 EncAsicMemAlloc_V2(asicData_s * asic, u32 width, u32 height,
 
         asic->internalImageLumSize = mbTotal * (16 * 16);
         asic->internalImageChrSize = mbTotal * (2 * 8 * 8);
+        printf("[ASICMEM] lumSize=%lu chrSize=%lu lumTbl=%lu chrTbl=%lu\r\n",
+               (unsigned long)asic->internalImageLumSize,
+               (unsigned long)asic->internalImageChrSize,
+               (unsigned long)internalImageLumaTableSize,
+               (unsigned long)internalImageChromaTableSize);
 
         ASSERT((numRefBuffsLum >= 1) && (numRefBuffsLum <= ASIC_FRAME_BUF_LUM_MAX));
         ASSERT((numRefBuffsChr >= 2) && (numRefBuffsChr <= ASIC_FRAME_BUF_CHR_MAX));
 
         for (i = 0; i < numRefBuffsLum; i++)
         {
+            printf("[ASICMEM] alloc LUMA[%lu] size=%lu\r\n",
+                   (unsigned long)i,
+                   (unsigned long)(asic->internalImageLumSize + internalImageLumaTableSize));
             if(EWLMallocRefFrm(asic->ewl, asic->internalImageLumSize + internalImageLumaTableSize,
                                &asic->internalImageLuma[i]) != EWL_OK)
             {
+                printf("[ASICMEM][ERR] alloc LUMA[%lu] failed\r\n", (unsigned long)i);
                 EncAsicMemFree_V2(asic);
                 return ENCHW_NOK;
             }
+            printf("[ASICMEM] alloc LUMA[%lu] ok va=0x%08lX bus=0x%08lX size=%lu\r\n",
+                   (unsigned long)i,
+                   (unsigned long)asic->internalImageLuma[i].virtualAddress,
+                   (unsigned long)asic->internalImageLuma[i].busAddress,
+                   (unsigned long)asic->internalImageLuma[i].size);
         }
 
         for (i = 0; i < numRefBuffsChr; i++)
         {
+            printf("[ASICMEM] alloc CHR[%lu] size=%lu\r\n",
+                   (unsigned long)i,
+                   (unsigned long)(asic->internalImageChrSize + internalImageChromaTableSize));
             if(EWLMallocRefFrm(asic->ewl, asic->internalImageChrSize + internalImageChromaTableSize,
                                &asic->internalImageChroma[i]) != EWL_OK)
             {
+                printf("[ASICMEM][ERR] alloc CHR[%lu] failed\r\n", (unsigned long)i);
                 EncAsicMemFree_V2(asic);
                 return ENCHW_NOK;
             }
+            printf("[ASICMEM] alloc CHR[%lu] ok va=0x%08lX bus=0x%08lX size=%lu\r\n",
+                   (unsigned long)i,
+                   (unsigned long)asic->internalImageChroma[i].virtualAddress,
+                   (unsigned long)asic->internalImageChroma[i].busAddress,
+                   (unsigned long)asic->internalImageChroma[i].size);
         }
 
         /* Set base addresses to the registers */
@@ -168,12 +199,18 @@ i32 EncAsicMemAlloc_V2(asicData_s * asic, u32 width, u32 height,
 
         /* Optional scaled image output */
         if(scaledWidth*scaledHeight) {
+            printf("[ASICMEM] alloc SCALED size=%lu\r\n", (unsigned long)(scaledWidth * scaledHeight * 2U));
             if (EWLMallocRefFrm(asic->ewl, scaledWidth*scaledHeight*2,
                            &asic->scaledImage) != EWL_OK)
             {
+                printf("[ASICMEM][ERR] alloc SCALED failed\r\n");
                 EncAsicMemFree_V2(asic);
                 return ENCHW_NOK;
             }
+            printf("[ASICMEM] alloc SCALED ok va=0x%08lX bus=0x%08lX size=%lu\r\n",
+                   (unsigned long)asic->scaledImage.virtualAddress,
+                   (unsigned long)asic->scaledImage.busAddress,
+                   (unsigned long)asic->scaledImage.size);
             regs->scaledLumBase = asic->scaledImage.busAddress;
         }
 
@@ -183,37 +220,58 @@ i32 EncAsicMemAlloc_V2(asicData_s * asic, u32 width, u32 height,
          * Also used for VP8 partitions. */
         buff = &asic->sizeTbl;
         asic->sizeTblSize = (sizeof(u32) * (height+4) + 7) & (~7);
+        printf("[ASICMEM] alloc sizeTbl size=%lu\r\n", (unsigned long)asic->sizeTblSize);
 
         if(EWLMallocLinear(asic->ewl, asic->sizeTblSize, buff) != EWL_OK)
         {
+            printf("[ASICMEM][ERR] alloc sizeTbl failed\r\n");
             EncAsicMemFree_V2(asic);
             return ENCHW_NOK;
         }
+        printf("[ASICMEM] alloc sizeTbl ok va=0x%08lX bus=0x%08lX size=%lu\r\n",
+               (unsigned long)buff->virtualAddress,
+               (unsigned long)buff->busAddress,
+               (unsigned long)buff->size);
 
         /* H264: CABAC context tables: all qps, intra+inter, 464 bytes/table.
          * VP8: The same table is used for probability tables, 1208 bytes. */
         if (regs->codingType == ASIC_VP8) i = 8*55+8*96;
         else i = 52*2*464;
+        printf("[ASICMEM] alloc cabacCtx size=%lu\r\n", (unsigned long)i);
 
         if(EWLMallocLinear(asic->ewl, i, &asic->cabacCtx) != EWL_OK)
         {
+            printf("[ASICMEM][ERR] alloc cabacCtx failed\r\n");
             EncAsicMemFree_V2(asic);
             return ENCHW_NOK;
         }
+        printf("[ASICMEM] alloc cabacCtx ok va=0x%08lX bus=0x%08lX size=%lu\r\n",
+               (unsigned long)asic->cabacCtx.virtualAddress,
+               (unsigned long)asic->cabacCtx.busAddress,
+               (unsigned long)asic->cabacCtx.size);
         regs->cabacCtxBase = asic->cabacCtx.busAddress;
 
         /* MV output table */
+        printf("[ASICMEM] alloc mvOutput size=%lu\r\n",
+               (unsigned long)(mbTotal*sizeof(encOutputMbInfoDebug_s)));
         if(EWLMallocLinear(asic->ewl, mbTotal*sizeof(encOutputMbInfoDebug_s),
                           &asic->mvOutput) != EWL_OK)
         {
+            printf("[ASICMEM][ERR] alloc mvOutput failed\r\n");
             EncAsicMemFree_V2(asic);
             return ENCHW_NOK;
         }
+        printf("[ASICMEM] alloc mvOutput ok va=0x%08lX bus=0x%08lX size=%lu\r\n",
+               (unsigned long)asic->mvOutput.virtualAddress,
+               (unsigned long)asic->mvOutput.busAddress,
+               (unsigned long)asic->mvOutput.size);
         regs->mvOutputBase = asic->mvOutput.busAddress;
         regs->mvOutEnable = 1;
 
         /* Clear mv output memory*/
+        printf("[ASICMEM] memset mvOutput start size=%lu\r\n", (unsigned long)asic->mvOutput.size);
         EWLmemset(asic->mvOutput.virtualAddress, 0, asic->mvOutput.size);
+        printf("[ASICMEM] memset mvOutput done\r\n");
 
         if(regs->codingType == ASIC_VP8) {
             /* VP8: Table of counter for probability updates. */
@@ -231,16 +289,24 @@ i32 EncAsicMemAlloc_V2(asicData_s * asic, u32 width, u32 height,
         if(EWLMallocLinear(asic->ewl, (mbTotal*4 + 63)/64*8,
                           &asic->segmentMap) != EWL_OK)
         {
+            printf("[ASICMEM][ERR] alloc segmentMap failed\r\n");
             EncAsicMemFree_V2(asic);
             return ENCHW_NOK;
         }
+        printf("[ASICMEM] alloc segmentMap ok va=0x%08lX bus=0x%08lX size=%lu\r\n",
+               (unsigned long)asic->segmentMap.virtualAddress,
+               (unsigned long)asic->segmentMap.busAddress,
+               (unsigned long)asic->segmentMap.size);
         regs->segmentMapBase = asic->segmentMap.busAddress;
 
+        printf("[ASICMEM] memset segmentMap start size=%lu\r\n", (unsigned long)asic->segmentMap.size);
         EWLmemset(asic->segmentMap.virtualAddress, 0,
                   asic->segmentMap.size);
+        printf("[ASICMEM] memset segmentMap done\r\n");
 
     }
 
+    printf("[ASICMEM] done ok\r\n");
     return ENCHW_OK;
 }
 

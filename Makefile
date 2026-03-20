@@ -23,8 +23,8 @@ rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(su
 # target
 ######################################
 TARGET = Project
- # Supported Options: VD66GY; IMX335; VD55G1; VD1943
-SENSOR_LIST = IMX335 VD66GY VD55G1 VD1943
+ # Supported Options: VD66GY; VD55G1; VD1943
+SENSOR_LIST = VD66GY VD55G1 VD1943
 
 MODEL_DIR = Model
 BINARY_DIR = Binary

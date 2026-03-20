@@ -16,6 +16,7 @@
   ******************************************************************************
   */
 /* Includes ------------------------------------------------------------------*/
+#include <stdio.h>
 #include <string.h>
 #include "ewl.h"
 #include "ewl_impl.h"
@@ -47,6 +48,16 @@ u32 mem_counter = 0;
 #define EWL_DEFAULT_POOL_SIZE 0x190000
 #endif /* EWL_DEFAULT_POOL_SIZE */
 
+#ifndef APP_VENC_INIT_TRACE
+#define APP_VENC_INIT_TRACE 1
+#endif
+
+#if APP_VENC_INIT_TRACE
+#define ENC_TRACE(...) printf(__VA_ARGS__)
+#else
+#define ENC_TRACE(...)
+#endif
+
 /* Private macros ------------------------------------------------------------*/
 
 /* Private variables ---------------------------------------------------------*/
@@ -61,7 +72,12 @@ static VENC_EWL_TypeDef ewl_instance;
   */
 u32 EWLReadAsicID(void)
 {
-  return LL_VENC_ReadRegister(0UL);
+  u32 id;
+
+  ENC_TRACE("[EWL] ReadAsicID enter\r\n");
+  id = LL_VENC_ReadRegister(0UL);
+  ENC_TRACE("[EWL] ReadAsicID val=0x%08lX\r\n", (unsigned long)id);
+  return id;
 }
 
 /**
@@ -70,9 +86,11 @@ u32 EWLReadAsicID(void)
   */
 EWLHwConfig_t EWLReadAsicConfig(void)
 {
+  ENC_TRACE("[EWL] ReadAsicConfig enter\r\n");
 
   /* read first part of the configuration stored in register 63 */
   u32 cfgval = LL_VENC_ReadRegister(63UL);
+  ENC_TRACE("[EWL] ReadAsicConfig reg63=0x%08lX\r\n", (unsigned long)cfgval);
   EWLHwConfig_t cfg_info;
   cfg_info.maxEncodedWidth = cfgval & ((1U << 12U) - 1U);
   cfg_info.h264Enabled = (cfgval >> 27U) & 1U;
@@ -89,6 +107,7 @@ EWLHwConfig_t EWLReadAsicConfig(void)
 
   /* read second part of the configuration stored in register 296 */
   cfgval = LL_VENC_ReadRegister(296UL);
+  ENC_TRACE("[EWL] ReadAsicConfig reg296=0x%08lX\r\n", (unsigned long)cfgval);
 
   cfg_info.addr64Support = (cfgval >> 31U) & 1U;
   cfg_info.dnfSupport = (cfgval >> 30U) & 1U;
@@ -149,13 +168,32 @@ EWLHwConfig_t EWLReadAsicConfig(void)
   */
 const void *EWLInit(EWLInitParam_t *param)
 {
+  u32 client_type;
+
+  ENC_TRACE("[EWL] Init enter param=0x%08lX\r\n", (unsigned long)param);
 
   PTRACE("EWLInit: Start\n");
 
-  /* Check for NULL pointer */
-  assert_param(param != NULL);
-  /* only H264 (0) and JPEG (1) are supported */
-  assert_param(param->clientType <= 1U);
+  if (param == NULL)
+  {
+    ENC_TRACE("[EWL][ERR] Init param is NULL\r\n");
+    return NULL;
+  }
+
+  client_type = param->clientType;
+  ENC_TRACE("[EWL] Init raw clientType=%lu (H264=%u JPEG=%u VP8=%u)\r\n",
+            (unsigned long)client_type,
+            (unsigned int)EWL_CLIENT_TYPE_H264_ENC,
+            (unsigned int)EWL_CLIENT_TYPE_JPEG_ENC,
+            (unsigned int)EWL_CLIENT_TYPE_VP8_ENC);
+
+  if ((client_type != EWL_CLIENT_TYPE_H264_ENC) &&
+      (client_type != EWL_CLIENT_TYPE_JPEG_ENC))
+  {
+    ENC_TRACE("[EWL][ERR] Init unsupported clientType=%lu\r\n", (unsigned long)client_type);
+    return NULL;
+  }
+  ENC_TRACE("[EWL] Init clientType accepted=%lu\r\n", (unsigned long)client_type);
 
   u8 *mem_pool = NULL;
   size_t mem_pool_size = EWL_DEFAULT_POOL_SIZE;
@@ -163,6 +201,8 @@ const void *EWLInit(EWLInitParam_t *param)
 #if (EWL_ALLOC_API == EWL_USE_THREADX_MM) || (EWL_ALLOC_API == EWL_USE_STM32MPM_MM)
   /* for ThreadX and STM32MPM, a user defined pool is required */
   EWLPoolChoiceCb(&mem_pool, &mem_pool_size);
+  ENC_TRACE("[EWL] Init pool choice ptr=0x%08lX size=%lu\r\n",
+            (unsigned long)mem_pool, (unsigned long)mem_pool_size);
   if (mem_pool == NULL)
   {
     PTRACE("error : memory pool pointer NULL");
@@ -172,6 +212,7 @@ const void *EWLInit(EWLInitParam_t *param)
   /* set pool parameters in instance */
   ewl_instance.pool = mem_pool;
   ewl_instance.pool_size = mem_pool_size;
+  ENC_TRACE("[EWL] Init pool set done\r\n");
 
 #if (EWL_ALLOC_API == EWL_USE_MALLOC_MM)
   /* nothing to do if malloc is used for memory management */
@@ -207,17 +248,21 @@ const void *EWLInit(EWLInitParam_t *param)
   /* FREERTOS synchronization requires a semaphore. Initialize it and put ID in instance */
   ewl_instance.ewl_event_group = xEventGroupCreate();
   if(ewl_instance.ewl_event_group == NULL){
+    ENC_TRACE("[EWL][ERR] Init xEventGroupCreate failed\r\n");
     return NULL;
   }
+  ENC_TRACE("[EWL] Init event group=0x%08lX\r\n", (unsigned long)ewl_instance.ewl_event_group);
   HAL_NVIC_SetPriority(VENC_IRQn, 0x07, 0);
   HAL_NVIC_EnableIRQ(VENC_IRQn);
+  ENC_TRACE("[EWL] Init NVIC configured\r\n");
 #elif (EWL_SYNC_API == EWL_USER_SYNC)
 #else
 #error "incorrect EWL synchronization configuration"
 #endif /* EWL_SYNC_API */
 
   /* set client type and pool attributes */
-  ewl_instance.clientType = param->clientType;
+  ewl_instance.clientType = client_type;
+  ENC_TRACE("[EWL] Init done instance=0x%08lX\r\n", (unsigned long)&ewl_instance);
 
   return (void *)&ewl_instance;
 }

@@ -45,6 +45,7 @@
 /*------------------------------------------------------------------------------
     1. Include headers
 ------------------------------------------------------------------------------*/
+#include <stdio.h>
 #include "string.h"
 #include "H264Init.h"
 #include "H264Denoise.h"
@@ -247,67 +248,111 @@ H264EncRet H264Init(const H264EncConfig *pEncCfg, h264Instance_s **instAddr)
 
     ASSERT(pEncCfg);
     ASSERT(instAddr);
+    printf("[H264INIT] enter cfg=0x%08lX instAddr=0x%08lX\r\n",
+           (unsigned long)pEncCfg, (unsigned long)instAddr);
 
     *instAddr = NULL;
 
     param.clientType = EWL_CLIENT_TYPE_H264_ENC;
+    printf("[H264INIT] EWLInit client=%lu\r\n", (unsigned long)param.clientType);
 
     /* Init EWL */
     if ((ewl = EWLInit(&param)) == NULL)
+    {
+        printf("[H264INIT][ERR] EWLInit failed\r\n");
         return H264ENC_EWL_ERROR;
+    }
+    printf("[H264INIT] EWLInit ok ewl=0x%08lX\r\n", (unsigned long)ewl);
 
     /* Encoder instance */
     inst = (h264Instance_s *) EWLcalloc(1, sizeof(h264Instance_s));
 
     if (inst == NULL)
     {
+        printf("[H264INIT][ERR] alloc instance failed size=%lu\r\n", (unsigned long)sizeof(h264Instance_s));
         ret = H264ENC_MEMORY_ERROR;
         goto err;
     }
+    printf("[H264INIT] alloc instance ok inst=0x%08lX size=%lu\r\n",
+           (unsigned long)inst, (unsigned long)sizeof(h264Instance_s));
     
     /* read HW configuration */
+    printf("[H264INIT] read hw cfg...\r\n");
     inst->hwCfg = EWLReadAsicConfig();
+    printf("[H264INIT] hw cfg maxW=%lu h264=%lu bus=%lu width=%lu instant=%lu\r\n",
+           (unsigned long)inst->hwCfg.maxEncodedWidth,
+           (unsigned long)inst->hwCfg.h264Enabled,
+           (unsigned long)inst->hwCfg.busType,
+           (unsigned long)inst->hwCfg.busWidth,
+           (unsigned long)inst->hwCfg.instantSupport);
 
     /* Default values */
+    printf("[H264INIT] defaults init...\r\n");
     H264SeqParameterSetInit(&inst->seqParameterSet);
     H264PicParameterSetInit(&inst->picParameterSet);
     H264SliceInit(&inst->slice);
     H264EncDnfInit(inst);
+    printf("[H264INIT] defaults init done\r\n");
 
     /* Set parameters depending on user config */
+    printf("[H264INIT] SetParameter...\r\n");
     if (SetParameter(inst, pEncCfg) != ENCHW_OK)
     {
+        printf("[H264INIT][ERR] SetParameter failed\r\n");
         ret = H264ENC_INVALID_ARGUMENT;
         goto err;
     }
+    printf("[H264INIT] SetParameter ok\r\n");
 
+    printf("[H264INIT] SetPictureBuffer...\r\n");
     if (SetPictureBuffer(inst) != ENCHW_OK)
     {
+        printf("[H264INIT][ERR] SetPictureBuffer failed\r\n");
         ret = H264ENC_INVALID_ARGUMENT;
         goto err;
     }
+    printf("[H264INIT] SetPictureBuffer ok\r\n");
 
     /* Check and init the rest of parameters */
+    printf("[H264INIT] CheckParameter...\r\n");
     if (CheckParameter(inst) != ENCHW_OK)
     {
+        printf("[H264INIT][ERR] CheckParameter failed\r\n");
         ret = H264ENC_INVALID_ARGUMENT;
         goto err;
     }
+    printf("[H264INIT] CheckParameter ok\r\n");
 
+    printf("[H264INIT] H264InitRc...\r\n");
     if (H264InitRc(&inst->rateControl, 1) != ENCHW_OK)
     {
+        printf("[H264INIT][ERR] H264InitRc failed\r\n");
         return H264ENC_INVALID_ARGUMENT;
     }
+    printf("[H264INIT] H264InitRc ok\r\n");
 
+    printf("[H264INIT] EncPreProcessAlloc mb=%lu...\r\n",
+           (unsigned long)(inst->mbPerRow * inst->mbPerCol));
     if (EncPreProcessAlloc(&inst->preProcess,
                            inst->mbPerRow * inst->mbPerCol) != ENCHW_OK)
+    {
+        printf("[H264INIT][ERR] EncPreProcessAlloc failed\r\n");
         return ENCHW_NOK;
+    }
+    printf("[H264INIT] EncPreProcessAlloc ok\r\n");
 
     /* Initialize ASIC */
     inst->asic.ewl = ewl;
+    printf("[H264INIT] EncAsicControllerInit...\r\n");
     (void) EncAsicControllerInit(&inst->asic);
+    printf("[H264INIT] EncAsicControllerInit done\r\n");
 
     /* Allocate internal SW/HW shared memories */
+    printf("[H264INIT] EncAsicMemAlloc_V2 lum=%lu x %lu refs=%lu/%lu...\r\n",
+           (unsigned long)inst->preProcess.lumWidth,
+           (unsigned long)inst->preProcess.lumHeight,
+           (unsigned long)inst->numRefBuffsLum,
+           (unsigned long)inst->numRefBuffsChr);
     if (EncAsicMemAlloc_V2(&inst->asic,
                            (u32) inst->preProcess.lumWidth,
                            (u32) inst->preProcess.lumHeight,
@@ -316,16 +361,18 @@ H264EncRet H264Init(const H264EncConfig *pEncCfg, h264Instance_s **instAddr)
                            ASIC_H264, inst->numRefBuffsLum,
                            inst->numRefBuffsChr) != ENCHW_OK)
     {
-
+        printf("[H264INIT][ERR] EncAsicMemAlloc_V2 failed\r\n");
         ret = H264ENC_EWL_MEMORY_ERROR;
         goto err;
     }
+    printf("[H264INIT] EncAsicMemAlloc_V2 ok\r\n");
 
     /* Assign allocated HW frame buffers into picture buffer */
     H264PictureBufferSetupH264(&inst->picBuffer, &inst->asic,
                                   inst->numRefBuffsLum, inst->numRefBuffsChr);
 
     *instAddr = inst;
+    printf("[H264INIT] done inst=0x%08lX\r\n", (unsigned long)inst);
 
     /* init VUI */
     {
@@ -344,6 +391,8 @@ H264EncRet H264Init(const H264EncConfig *pEncCfg, h264Instance_s **instAddr)
     return ret;
 
 err:
+    printf("[H264INIT][ERR] exit ret=%d inst=0x%08lX ewl=0x%08lX\r\n",
+           ret, (unsigned long)inst, (unsigned long)ewl);
     if (inst != NULL)
         EWLfree(inst);
     if (ewl != NULL)

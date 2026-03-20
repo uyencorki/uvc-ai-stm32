@@ -27,12 +27,12 @@
 #define SENSOR_DVP_HEIGHT 1080
 #define SENSOR_DVP_FLIP CMW_MIRRORFLIP_NONE
 
-/* Keep VENC at 720p during bring-up to fit PSRAM and reduce DCMIPP load. */
-#define VENC_DVP_WIDTH 1280
-#define VENC_DVP_HEIGHT 720
+/* Use native PX9210K output for capture/encode path. */
+#define VENC_DVP_WIDTH 1920
+#define VENC_DVP_HEIGHT 1080
 
 /* Delay display by CAPTURE_DELAY frame number */
-#define CAPTURE_DELAY 1
+#define CAPTURE_DELAY 0
 
 /* Bring-up mode for new DVP sensors: run only PIPE1 first, then re-enable NN/PIPE2 later. */
 #define APP_DVP_BRINGUP_PIPE1_ONLY 1

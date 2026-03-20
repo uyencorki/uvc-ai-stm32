@@ -68,6 +68,16 @@
 #include "EncJpegQuantTables.h"
 #include "EncJpegMarkers.h"
 
+/*
+ * STM32 integration note:
+ * Keep 4:2:2 path enabled for YUV422 interleaved input (YUYV/UYVY).
+ * If this define is missing at build-time, JpegEncSetPictureSize() falls back
+ * to 4:2:0 mode unconditionally.
+ */
+#ifndef JPEGENC_422_MODE_SUPPORTED
+#define JPEGENC_422_MODE_SUPPORTED 1
+#endif
+
 #include "EncJpegPutBits.h"
 #include "encasiccontroller.h"
 #include "ewl.h"

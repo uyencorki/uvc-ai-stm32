@@ -59,6 +59,7 @@
     1. Include headers
 ------------------------------------------------------------------------------*/
 #include <string.h>
+#include <stdio.h>
 #include "h264encapi.h"
 #include "enccommon.h"
 #include "H264Instance.h"
@@ -186,8 +187,24 @@ H264EncRet H264EncInit(const H264EncConfig * pEncCfg, H264EncInst * instAddr)
 {
     H264EncRet ret;
     h264Instance_s *pEncInst = NULL;
+    u32 hw_id;
 
     APITRACE("H264EncInit#");
+    printf("[H264API] init enter cfg=0x%08lX inst=0x%08lX\r\n",
+           (unsigned long)pEncCfg,
+           (unsigned long)instAddr);
+    if (pEncCfg != NULL)
+    {
+        printf("[H264API] cfg stream=%lu view=%lu level=%lu wh=%lux%lu fps=%lu/%lu ref=%lu\r\n",
+               (unsigned long)pEncCfg->streamType,
+               (unsigned long)pEncCfg->viewMode,
+               (unsigned long)pEncCfg->level,
+               (unsigned long)pEncCfg->width,
+               (unsigned long)pEncCfg->height,
+               (unsigned long)pEncCfg->frameRateNum,
+               (unsigned long)pEncCfg->frameRateDenom,
+               (unsigned long)pEncCfg->refFrameAmount);
+    }
     APITRACEPARAM("streamType", pEncCfg->streamType);
     APITRACEPARAM("viewMode", pEncCfg->viewMode);
     APITRACEPARAM("level", pEncCfg->level);
@@ -211,29 +228,40 @@ H264EncRet H264EncInit(const H264EncConfig * pEncCfg, H264EncInst * instAddr)
     /* Check for illegal inputs */
     if(pEncCfg == NULL || instAddr == NULL)
     {
+        printf("[H264API][ERR] null argument\r\n");
         APITRACE("H264EncInit: ERROR Null argument");
         return H264ENC_NULL_ARGUMENT;
     }
 
     /* Check for correct HW */
-    if ((EWLReadAsicID() & HW_ID_MASK) != HW_ID && (EWLReadAsicID() & HW_ID_MASK) != HW_ID_NE)
+    printf("[H264API] read asic id...\r\n");
+    hw_id = (EWLReadAsicID() & HW_ID_MASK);
+    printf("[H264API] asic id(masked)=0x%08lX expected=0x%08X/0x%08X\r\n",
+           (unsigned long)hw_id, HW_ID, HW_ID_NE);
+    if (hw_id != HW_ID && hw_id != HW_ID_NE)
     {
+        printf("[H264API][ERR] invalid hw id\r\n");
         APITRACE("H264EncInit: ERROR Invalid HW ID");
         return H264ENC_ERROR;
     }
 
     /* Check that configuration is valid */
+    printf("[H264API] check cfg...\r\n");
     if(H264CheckCfg(pEncCfg) == ENCHW_NOK)
     {
+        printf("[H264API][ERR] invalid cfg\r\n");
         APITRACE("H264EncInit: ERROR Invalid configuration");
         return H264ENC_INVALID_ARGUMENT;
     }
 
     /* Initialize encoder instance and allocate memories */
+    printf("[H264API] call H264Init...\r\n");
     ret = H264Init(pEncCfg, &pEncInst);
+    printf("[H264API] H264Init ret=%d inst=0x%08lX\r\n", ret, (unsigned long)pEncInst);
 
     if(ret != H264ENC_OK)
     {
+        printf("[H264API][ERR] init failed ret=%d\r\n", ret);
         APITRACE("H264EncInit: ERROR Initialization failed");
         return ret;
     }
@@ -244,6 +272,7 @@ H264EncRet H264EncInit(const H264EncConfig * pEncCfg, H264EncInst * instAddr)
     pEncInst->inst = pEncInst;  /* used as checksum */
 
     *instAddr = (H264EncInst) pEncInst;
+    printf("[H264API] init done inst=0x%08lX\r\n", (unsigned long)pEncInst);
 
     APITRACE("H264EncInit: OK");
     return H264ENC_OK;

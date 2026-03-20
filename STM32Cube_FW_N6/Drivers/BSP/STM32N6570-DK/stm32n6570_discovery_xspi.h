@@ -42,6 +42,7 @@ extern "C" {
 #define USE_RAM_MEMORY_APS256XX              1
 #endif /* USE_RAM_MEMORY_APS256XX */
 
+/* ------- driver W958D6NBKX : begin ------- */
 #ifndef BSP_XSPI_RAM_USE_W958D6NBKX
 /*
  * Set to 1U to use Winbond W958D6NBKX HyperRAM 3.0 command/config path
@@ -52,11 +53,12 @@ extern "C" {
 
 #ifndef BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT
 /*
- * W958 path defaults to skip vendor-reg write until register map is validated.
+ * Enable vendor-reg init for W958 by default to enforce
+ * fixed-latency/linear-burst config from bring-up notes.
  * APS256XX path keeps vendor register init enabled.
  */
 #if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
-#define BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT    1U
+#define BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT    0U
 #else
 #define BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT    0U
 #endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
@@ -71,7 +73,7 @@ extern "C" {
 #endif /* BSP_XSPI_RAM_WRITE_LATENCY_CODE */
 
 #ifndef BSP_XSPI_RAM_IO_MODE
-#define BSP_XSPI_RAM_IO_MODE                 1U /* 0: x8, 1: x16 */
+#define BSP_XSPI_RAM_IO_MODE                 0U /* 0: x8, 1: x16 */
 #endif /* BSP_XSPI_RAM_IO_MODE */
 
 #ifndef BSP_XSPI_RAM_BURST_TYPE
@@ -79,9 +81,12 @@ extern "C" {
 #endif /* BSP_XSPI_RAM_BURST_TYPE */
 
 #ifndef BSP_XSPI_RAM_W958_CR0_INIT
-/* W958 CR0 default-style setup:
- * [15]=1 normal, [14:12]=000 DS, [11:8]=1111 reserved, [7:4]=0010 latency=7,
- * [3]=1 fixed-lat, [2]=1 legacy wrap, [1:0]=11 burst len 32.
+/* W958 CR0 bring-up setup:
+ * [15]=1 normal, [14:12]=000 drive strength default (34 ohms),
+ * [11:8]=1111 reserved default, [7:4]=0010 latency=7 clocks,
+ * [3]=1 fixed latency enable,
+ * [2]=1 (device observed readback behavior on this board),
+ * [1:0]=11 burst length field=32 (kept for compatibility).
  */
 #define BSP_XSPI_RAM_W958_CR0_INIT           0x8F2FU
 #endif /* BSP_XSPI_RAM_W958_CR0_INIT */
@@ -94,12 +99,20 @@ extern "C" {
 #define BSP_XSPI_RAM_W958_CR1_INIT           0xFFC1U
 #endif /* BSP_XSPI_RAM_W958_CR1_INIT */
 
+#ifndef BSP_XSPI_RAM_W958_BYPASS_CR_CHECK
+/* Strict mode: 0 = fail init immediately when CR readback mismatches. */
+#define BSP_XSPI_RAM_W958_BYPASS_CR_CHECK    0U
+#endif /* BSP_XSPI_RAM_W958_BYPASS_CR_CHECK */
+
 #ifndef BSP_XSPI_RAM_W958_ID0_ADDR
 #define BSP_XSPI_RAM_W958_ID0_ADDR           0x00000000U
 #endif /* BSP_XSPI_RAM_W958_ID0_ADDR */
 
 #ifndef BSP_XSPI_RAM_W958_ID1_ADDR
-/* For XSPI HyperBus command addressing, register-word step is 2 bytes on x16 bus. */
+/*
+ * HAL_XSPI_HyperbusCmd uses byte-oriented address mapping for register space on this platform.
+ * So datasheet reg index 0x0001 (ID1) maps to command address 0x0002.
+ */
 #define BSP_XSPI_RAM_W958_ID1_ADDR           0x00000002U
 #endif /* BSP_XSPI_RAM_W958_ID1_ADDR */
 
@@ -114,17 +127,25 @@ extern "C" {
 #endif /* BSP_XSPI_RAM_W958_CR1_ADDR */
 
 #ifndef BSP_XSPI_RAM_W958_REG_DATA_MODE
-/* Keep register transactions on x8 data mode for robust ID/CR probing. */
+/*
+ * Register path rollback:
+ * keep x8 mode as the known-good mode from earlier bring-up logs
+ * (reg_dmode=67108864) for ID/CR accesses.
+ */
 #define BSP_XSPI_RAM_W958_REG_DATA_MODE      HAL_XSPI_DATA_8_LINES
 #endif /* BSP_XSPI_RAM_W958_REG_DATA_MODE */
 
 #ifndef BSP_XSPI_RAM_W958_MEM_DATA_MODE
-/* W958D6NBKX data array path can run in x16 mode on supported wiring/timing. */
-#define BSP_XSPI_RAM_W958_MEM_DATA_MODE      HAL_XSPI_DATA_16_LINES
+/*
+ * Keep memory path in x8 (same as known-good register path during bring-up).
+ */
+#define BSP_XSPI_RAM_W958_MEM_DATA_MODE      HAL_XSPI_DATA_8_LINES
 #endif /* BSP_XSPI_RAM_W958_MEM_DATA_MODE */
 
 #ifndef BSP_XSPI_RAM_W958_WRITE_DQS_MODE
-/* Keep RWDS/DQS active on write path to avoid undefined byte-mask behavior. */
+/*
+ * 8-line HyperBus path requires RWDS as DQS for reliable write sampling.
+ */
 #define BSP_XSPI_RAM_W958_WRITE_DQS_MODE     HAL_XSPI_DQS_ENABLE
 #endif /* BSP_XSPI_RAM_W958_WRITE_DQS_MODE */
 
@@ -133,9 +154,14 @@ extern "C" {
 #define BSP_XSPI_RAM_W958_DATA_MODE          BSP_XSPI_RAM_W958_MEM_DATA_MODE
 #endif /* BSP_XSPI_RAM_W958_DATA_MODE */
 
+#ifndef BSP_XSPI_RAM_W958_BOOT_PRESCALER
+/* Bring-up mode: start slower clock for robust HyperRAM training/debug. */
+#define BSP_XSPI_RAM_W958_BOOT_PRESCALER     7U
+#endif /* BSP_XSPI_RAM_W958_BOOT_PRESCALER */
+
 #ifndef BSP_XSPI_RAM_W958_POST_INIT_PRESCALER
-/* 3 => same as safe bring-up speed configured in BSP_XSPI_RAM_Init(). */
-#define BSP_XSPI_RAM_W958_POST_INIT_PRESCALER 3U
+/* Debug mode: lower HyperRAM clock to increase timing margin. */
+#define BSP_XSPI_RAM_W958_POST_INIT_PRESCALER 7U
 #endif /* BSP_XSPI_RAM_W958_POST_INIT_PRESCALER */
 
 #ifndef BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES
@@ -146,6 +172,80 @@ extern "C" {
 /* CR0 default latency code is 7; fixed latency mode requires 2x initial latency. */
 #define BSP_XSPI_RAM_W958_ACCESS_CYCLES      (2U * BSP_XSPI_RAM_READ_LATENCY_CODE)
 #endif /* BSP_XSPI_RAM_W958_ACCESS_CYCLES */
+
+#ifndef BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES
+/*
+ * Bring-up chunk: short but not too small.
+ */
+#define BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES    32U
+#endif /* BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES */
+
+#ifndef BSP_XSPI_RAM_W958_ENABLE_RECOVER
+/*
+ * 0: stop immediately on first read/write error.
+ * 1: allow driver hard-recover sequence after a memory command failure.
+ */
+#define BSP_XSPI_RAM_W958_ENABLE_RECOVER      0U
+#endif /* BSP_XSPI_RAM_W958_ENABLE_RECOVER */
+
+#ifndef BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE
+/*
+ * Run RAM address read/write sanity test during BSP_XSPI_RAM_Init().
+ */
+#define BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE    0U
+#endif /* BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE */
+
+#ifndef BSP_XSPI_RAM_W958_ADDR_TEST_BYTES
+/*
+ * Per-address test payload (must be <= BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES).
+ */
+#define BSP_XSPI_RAM_W958_ADDR_TEST_BYTES     32U
+#endif /* BSP_XSPI_RAM_W958_ADDR_TEST_BYTES */
+
+#ifndef BSP_XSPI_RAM_W958_TESTBUF_ADDR
+/*
+ * Dedicated bring-up buffer address in known-good region (< 16MB).
+ */
+#define BSP_XSPI_RAM_W958_TESTBUF_ADDR        0x00001000U
+#endif /* BSP_XSPI_RAM_W958_TESTBUF_ADDR */
+
+#ifndef BSP_XSPI_RAM_W958_TESTIMG_WIDTH
+/* YUV422 test image width (must be even). */
+#define BSP_XSPI_RAM_W958_TESTIMG_WIDTH       64U
+#endif /* BSP_XSPI_RAM_W958_TESTIMG_WIDTH */
+
+#ifndef BSP_XSPI_RAM_W958_TESTIMG_HEIGHT
+/* YUV422 test image height. */
+#define BSP_XSPI_RAM_W958_TESTIMG_HEIGHT      48U
+#endif /* BSP_XSPI_RAM_W958_TESTIMG_HEIGHT */
+
+#ifndef BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES
+#define BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES \
+  ((uint32_t)(BSP_XSPI_RAM_W958_TESTIMG_WIDTH * BSP_XSPI_RAM_W958_TESTIMG_HEIGHT * 2U))
+#endif /* BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES */
+
+#ifndef BSP_XSPI_RAM_MMP_BASE
+#define BSP_XSPI_RAM_MMP_BASE                 XSPI1_BASE
+#endif /* BSP_XSPI_RAM_MMP_BASE */
+
+#ifndef BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE
+/*
+ * Bring-up test mode: limit XSPI memory aperture to lower 16MB
+ * (half of the W958 32MB physical density).
+ * - 16MB  => HAL_XSPI_SIZE_128MB (128Mbit)
+ * - 32MB  => HAL_XSPI_SIZE_256MB (256Mbit)
+ */
+#define BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE    HAL_XSPI_SIZE_128MB
+#endif /* BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE */
+
+#ifndef BSP_XSPI_RAM_SIZE_BYTES
+/*
+ * Software-visible RAM size for bounds checks/tests.
+ * Keep this aligned with BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE.
+ */
+#define BSP_XSPI_RAM_SIZE_BYTES               ((uint32_t)(16U * 1024U * 1024U))
+#endif /* BSP_XSPI_RAM_SIZE_BYTES */
+/* ------- driver W958D6NBKX : end ------- */
 
 #if (USE_NOR_MEMORY_MX66UW1G45G == 1)
 #include "../Components/mx66uw1g45g/mx66uw1g45g.h"
@@ -531,6 +631,9 @@ int32_t BSP_XSPI_RAM_Write(uint32_t Instance, uint8_t *pData, uint32_t WriteAddr
 int32_t BSP_XSPI_RAM_EnableMemoryMappedMode(uint32_t Instance);
 int32_t BSP_XSPI_RAM_DisableMemoryMappedMode(uint32_t Instance);
 int32_t BSP_XSPI_RAM_ReadID(uint32_t Instance, uint8_t *Id);
+#if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
+int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance);
+#endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
 /**
   * @}
   */

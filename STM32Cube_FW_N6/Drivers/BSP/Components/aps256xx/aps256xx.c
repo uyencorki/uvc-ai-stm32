@@ -62,6 +62,12 @@ int32_t APS256XX_Read(XSPI_HandleTypeDef *Ctx, uint8_t *pData, uint32_t ReadAddr
                       uint32_t IOMode, uint32_t BurstType)
 {
   XSPI_RegularCmdTypeDef sCommand = {0};
+  APS256XX_LOG("APS256XX_Read addr=0x%08lX size=%lu lat=%lu io=%lu burst=%lu",
+               (unsigned long)ReadAddr,
+               (unsigned long)Size,
+               (unsigned long)LatencyCode,
+               (unsigned long)IOMode,
+               (unsigned long)BurstType);
 
   /* Initialize the read command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -112,6 +118,12 @@ int32_t APS256XX_Read_DMA(XSPI_HandleTypeDef *Ctx, uint8_t *pData, uint32_t Read
                           uint32_t LatencyCode, uint32_t IOMode, uint32_t BurstType)
 {
   XSPI_RegularCmdTypeDef sCommand = {0};
+  APS256XX_LOG("APS256XX_Read_DMA addr=0x%08lX size=%lu lat=%lu io=%lu burst=%lu",
+               (unsigned long)ReadAddr,
+               (unsigned long)Size,
+               (unsigned long)LatencyCode,
+               (unsigned long)IOMode,
+               (unsigned long)BurstType);
 
   /* Initialize the read command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -163,6 +175,12 @@ int32_t APS256XX_Write(XSPI_HandleTypeDef *Ctx, uint8_t *pData, uint32_t WriteAd
                        uint32_t IOMode, uint32_t BurstType)
 {
   XSPI_RegularCmdTypeDef sCommand = {0};
+  APS256XX_LOG("APS256XX_Write addr=0x%08lX size=%lu lat=%lu io=%lu burst=%lu",
+               (unsigned long)WriteAddr,
+               (unsigned long)Size,
+               (unsigned long)LatencyCode,
+               (unsigned long)IOMode,
+               (unsigned long)BurstType);
 
   /* Initialize the write command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -214,6 +232,12 @@ int32_t APS256XX_Write_DMA(XSPI_HandleTypeDef *Ctx, uint8_t *pData, uint32_t Wri
                            uint32_t LatencyCode, uint32_t IOMode, uint32_t BurstType)
 {
   XSPI_RegularCmdTypeDef sCommand = {0};
+  APS256XX_LOG("APS256XX_Write_DMA addr=0x%08lX size=%lu lat=%lu io=%lu burst=%lu",
+               (unsigned long)WriteAddr,
+               (unsigned long)Size,
+               (unsigned long)LatencyCode,
+               (unsigned long)IOMode,
+               (unsigned long)BurstType);
 
   /* Initialize the write command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -451,6 +475,8 @@ int32_t APS256XX_ReadID(XSPI_HandleTypeDef *Ctx, uint8_t *ID, uint32_t LatencyCo
   */
 int32_t APS256XX_EnterPowerDown(XSPI_HandleTypeDef *Ctx)
 {
+  APS256XX_LOG("APS256XX_EnterPowerDown");
+
   /* Update the deep power down value of the MR6 register */
   if (APS256XX_WriteReg(Ctx, APS256XX_MR6_ADDRESS, APS256XX_MR6_HS_HALF_SPEED_MODE) != APS256XX_OK)
   {
@@ -475,6 +501,7 @@ int32_t APS256XX_LeavePowerDown(XSPI_HandleTypeDef *Ctx)
   /* ---                  Memory takes 150us max to leave deep power down                    --- */
 
   XSPI_RegularCmdTypeDef sCommand = {0};
+  APS256XX_LOG("APS256XX_LeavePowerDown");
 
   /* Initialize the command */
   sCommand.OperationType       = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -513,6 +540,7 @@ int32_t APS256XX_LeavePowerDown(XSPI_HandleTypeDef *Ctx)
 int32_t APS256XX_Reset(XSPI_HandleTypeDef *Ctx)
 {
   XSPI_RegularCmdTypeDef sCommand = {0};
+  APS256XX_LOG("APS256XX_Reset");
 
   /* Initialize the command */
   sCommand.OperationType      = HAL_XSPI_OPTYPE_COMMON_CFG;

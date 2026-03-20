@@ -18,6 +18,7 @@
 #include "uvcl_usbx.h"
 
 #include <assert.h>
+#include <stdint.h>
 
 #include "uvcl_desc.h"
 #include "uvcl_internal.h"
@@ -65,6 +66,28 @@ static UVCL_Ctx_t *UVCL_usbx_get_ctx_from_stream(struct UX_DEVICE_CLASS_VIDEO_ST
   return UVCL_usbx_get_ctx_from_video_instance(stream->ux_device_class_video_stream_video);
 }
 
+static void UVCL_usbx_clean_dcache(void *buf, int len)
+{
+#if defined(USE_DCACHE)
+  uintptr_t src_addr;
+  uintptr_t clean_addr;
+  uint32_t clean_len;
+
+  if ((buf == NULL) || (len <= 0))
+  {
+    return;
+  }
+
+  src_addr = (uintptr_t)buf;
+  clean_addr = src_addr & ~((uintptr_t)31U);
+  clean_len = (uint32_t)(((src_addr - clean_addr) + (uintptr_t)len + 31U) & ~((uintptr_t)31U));
+  SCB_CleanDCache_by_Addr((uint8_t *)clean_addr, clean_len);
+#else
+  (void)buf;
+  (void)len;
+#endif
+}
+
 static void UVCL_SendPacket(UVCL_Ctx_t *p_ctx, UX_DEVICE_CLASS_VIDEO_STREAM *stream, int len)
 {
   ULONG buffer_length;
@@ -76,16 +99,24 @@ static void UVCL_SendPacket(UVCL_Ctx_t *p_ctx, UX_DEVICE_CLASS_VIDEO_STREAM *str
   assert(buffer_length >= len);
 
   memcpy(buffer, p_ctx->packet, len);
+  UVCL_usbx_clean_dcache(buffer, len);
+  __DMB();
   ret = ux_device_class_video_write_payload_commit(stream, len);
   assert(ret == UX_SUCCESS);
 }
 
 static void UVCL_DataIn(struct UX_DEVICE_CLASS_VIDEO_STREAM_STRUCT *stream)
 {
-  int packet_size = is_hs() ? UVC_ISO_HS_MPS : UVC_ISO_FS_MPS;
+  int packet_size = (int)stream->ux_device_class_video_stream_payload_buffer_size - 4;
   UVCL_Ctx_t *p_ctx = UVCL_usbx_get_ctx_from_stream(stream);
   UVCL_OnFlyCtx_t *on_fly_ctx;
+  int is_last;
   int len;
+
+  if (packet_size < 3)
+  {
+    return;
+  }
 
   if (p_ctx->state != UVCL_STATUS_STREAMING)
   {
@@ -97,6 +128,8 @@ static void UVCL_DataIn(struct UX_DEVICE_CLASS_VIDEO_STREAM_STRUCT *stream)
     p_ctx->on_fly_ctx = UVCL_StartNewFrameTransmission(p_ctx, packet_size);
 
   if (!p_ctx->on_fly_ctx) {
+    /* Keep EOH/FID and clear EOF when no frame data. */
+    p_ctx->packet[1] = (uint8_t)(UVC_PAYLOAD_BMH_EOH | (p_ctx->packet[1] & UVC_PAYLOAD_BMH_FID));
     UVCL_SendPacket(p_ctx, stream, 2);
     return ;
   }
@@ -104,7 +137,11 @@ static void UVCL_DataIn(struct UX_DEVICE_CLASS_VIDEO_STREAM_STRUCT *stream)
   /* Send next frame packet */
   on_fly_ctx = p_ctx->on_fly_ctx;
   //printf("S %d\n", on_fly_ctx->packet_index);
-  len = on_fly_ctx->packet_index == (on_fly_ctx->packet_nb - 1) ? on_fly_ctx->last_packet_size + 2 : packet_size;
+  is_last = (on_fly_ctx->packet_index == (on_fly_ctx->packet_nb - 1));
+  p_ctx->packet[1] = (uint8_t)(UVC_PAYLOAD_BMH_EOH |
+                               (p_ctx->packet[1] & UVC_PAYLOAD_BMH_FID) |
+                               (is_last ? UVC_PAYLOAD_BMH_EOF : 0U));
+  len = is_last ? (on_fly_ctx->last_packet_size + 2) : packet_size;
   memcpy(&p_ctx->packet[2], on_fly_ctx->cursor, len - 2);
   UVCL_SendPacket(p_ctx, stream, len);
 
@@ -141,7 +178,7 @@ static void UVCL_StartStreaming(struct UX_DEVICE_CLASS_VIDEO_STREAM_STRUCT *stre
 
   p_ctx->frame_period_in_ms = 1000 / stream_param.fps;
   p_ctx->packet[0] = 2;
-  p_ctx->packet[1] = 0;
+  p_ctx->packet[1] = UVC_PAYLOAD_BMH_EOH;
   p_ctx->frame_start = HAL_GetTick() - p_ctx->frame_period_in_ms;
   p_ctx->is_starting = 1;
   p_ctx->state = UVCL_STATUS_STREAMING;

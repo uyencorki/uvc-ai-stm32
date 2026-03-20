@@ -71,16 +71,20 @@ static int UVCL_FpsOk(UVCL_Ctx_t *p_ctx)
 static void UVCL_FillSentData(UVCL_Ctx_t *p_ctx, UVCL_OnFlyCtx_t *on_fly_ctx, uint8_t *p_frame, int fsize,
                              int packet_size)
 {
-  on_fly_ctx->packet_nb = (fsize + packet_size - 1) / (packet_size - 2);
-  on_fly_ctx->last_packet_size = fsize % (packet_size - 2);
-  if (!on_fly_ctx->last_packet_size)
+  const int payload_bytes = packet_size - 2; /* 2 bytes are UVC payload header. */
+
+  /* Number of packets must be ceil(frame_size / payload_bytes). */
+  on_fly_ctx->packet_nb = (fsize + payload_bytes - 1) / payload_bytes;
+  on_fly_ctx->last_packet_size = fsize % payload_bytes;
+  if (on_fly_ctx->last_packet_size == 0)
   {
-    on_fly_ctx->packet_nb--;
-    on_fly_ctx->last_packet_size = packet_size - 2;
+    on_fly_ctx->last_packet_size = payload_bytes;
   }
   on_fly_ctx->p_frame = p_frame;
   on_fly_ctx->cursor = p_frame;
-  p_ctx->packet[1] ^= 1;
+  /* Keep EOH=1, toggle FID at each new frame start and clear EOF. */
+  p_ctx->packet[1] = (uint8_t)(UVC_PAYLOAD_BMH_EOH |
+                               (((p_ctx->packet[1] ^ UVC_PAYLOAD_BMH_FID) & UVC_PAYLOAD_BMH_FID)));
 
   p_ctx->is_starting = 0;
   p_ctx->frame_start = HAL_GetTick();

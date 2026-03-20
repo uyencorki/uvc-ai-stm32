@@ -84,6 +84,11 @@
 #define UVCL_ALIGN_32 __attribute__ ((aligned (32)))
 #define UVCL_UNCACHED __attribute__ ((section (".uncached_bss")))
 
+/* UVC payload header bmHeaderInfo bits (2-byte payload header mode). */
+#define UVC_PAYLOAD_BMH_FID                           0x01U
+#define UVC_PAYLOAD_BMH_EOF                           0x02U
+#define UVC_PAYLOAD_BMH_EOH                           0x80U
+
 typedef struct
 {
   uint16_t bmHint;

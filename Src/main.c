@@ -46,9 +46,50 @@ int g_psram_verify_mismatch = -1;
 int g_psram_mmp_ret = BSP_ERROR_NO_INIT;
 uint8_t g_psram_id[6];
 uint8_t g_psram_probe_rd8[8];
+uint32_t g_psram_fullscan_bytes = 0U;
+uint32_t g_psram_fullscan_fail_chunks = 0U;
+uint32_t g_psram_fullscan_mismatch_bytes = 0U;
 
 static StaticTask_t main_thread;
 static StackType_t main_thread_stack[configMINIMAL_STACK_SIZE];
+
+#ifndef PSRAM_FULL_SCAN_ENABLE
+#define PSRAM_FULL_SCAN_ENABLE 0U
+#endif
+
+#ifndef PSRAM_FULL_SCAN_CHUNK_BYTES
+#define PSRAM_FULL_SCAN_CHUNK_BYTES 4096U
+#endif
+
+#ifndef PSRAM_FULL_SCAN_PROGRESS_STEP
+#define PSRAM_FULL_SCAN_PROGRESS_STEP (4U * 1024U * 1024U)
+#endif
+
+#ifndef PSRAM_WINDOW_ALIAS_TEST_ENABLE
+#define PSRAM_WINDOW_ALIAS_TEST_ENABLE 0U
+#endif
+
+#ifndef PSRAM_MMP_READ_SCAN_ENABLE
+#define PSRAM_MMP_READ_SCAN_ENABLE 0U
+#endif
+
+#ifndef PSRAM_QUICK_PROBE_ENABLE
+/* 0: hide small probe logs, 1: keep quick INC/ALT/WALK probe logs */
+#define PSRAM_QUICK_PROBE_ENABLE 0U
+#endif
+
+#ifndef PSRAM_SCAN_INFO_LOG_ENABLE
+/* 0: only scan errors are printed, 1: print start/progress/summary */
+#define PSRAM_SCAN_INFO_LOG_ENABLE 0U
+#endif
+
+#ifndef PSRAM_W958_YUV_TEST_ENABLE
+/* 1: run YUV422 write/read verify right after MMP enable */
+#define PSRAM_W958_YUV_TEST_ENABLE 1U
+#endif
+
+static uint8_t g_psram_full_wr[PSRAM_FULL_SCAN_CHUNK_BYTES];
+static uint8_t g_psram_full_rd[PSRAM_FULL_SCAN_CHUNK_BYTES];
 
 static void SystemClock_Config(void);
 static void NPURam_enable();
@@ -59,6 +100,11 @@ static void CONSOLE_Config(void);
 static void Setup_Mpu(void);
 static void PSRAM_DebugProbe(void);
 static void PSRAM_MMP_DebugProbe(void);
+#if (PSRAM_WINDOW_ALIAS_TEST_ENABLE == 1U)
+static void PSRAM_AliasDebugProbe(void);
+#endif
+static void PSRAM_FullScanDebugProbe(void);
+static void PSRAM_MMP_ReadScanDebugProbe(uint32_t expected_pattern_id);
 static void PSRAM_FillPattern(uint8_t *dst, uint32_t len, uint32_t pattern_id);
 static int PSRAM_CompareAndLog(const char *tag, const uint8_t *wr, const uint8_t *rd, uint32_t len);
 static int main_freertos(void);
@@ -401,6 +447,264 @@ static int PSRAM_CompareAndLog(const char *tag, const uint8_t *wr, const uint8_t
   return mismatch;
 }
 
+static void PSRAM_FillPatternWithOffset(uint8_t *dst, uint32_t len, uint32_t pattern_id, uint32_t base_off)
+{
+  uint32_t i;
+
+  for (i = 0; i < len; i++)
+  {
+    uint32_t x = base_off + i;
+    switch (pattern_id)
+    {
+      case 0U:
+        dst[i] = (uint8_t)(x & 0xFFU);
+        break;
+      case 1U:
+        dst[i] = ((x & 1U) == 0U) ? 0x55U : 0xAAU;
+        break;
+      default:
+        dst[i] = (uint8_t)(1U << (x & 7U));
+        break;
+    }
+  }
+}
+
+static int PSRAM_CompareChunk(const uint8_t *wr, const uint8_t *rd, uint32_t len,
+                              uint32_t *first_idx, uint8_t *exp, uint8_t *got)
+{
+  uint32_t i;
+  int mismatch = 0;
+  uint32_t idx = 0U;
+  uint8_t e = 0U;
+  uint8_t g = 0U;
+  int captured = 0;
+
+  for (i = 0; i < len; i++)
+  {
+    if (wr[i] != rd[i])
+    {
+      mismatch++;
+      if (captured == 0)
+      {
+        idx = i;
+        e = wr[i];
+        g = rd[i];
+        captured = 1;
+      }
+    }
+  }
+
+  if (first_idx != NULL)
+  {
+    *first_idx = idx;
+  }
+  if (exp != NULL)
+  {
+    *exp = e;
+  }
+  if (got != NULL)
+  {
+    *got = g;
+  }
+
+  return mismatch;
+}
+
+static void PSRAM_FullScanDebugProbe(void)
+{
+  static const char *pattern_name[3] = {"FULL-INC", "FULL-ALT55AA", "FULL-WALK1"};
+  static const uint32_t max_fail_logs = 16U;
+  uint32_t p;
+  uint32_t off;
+  uint32_t fail_logs = 0U;
+  uint32_t fail_chunks = 0U;
+  uint32_t mismatch_bytes = 0U;
+
+#if (PSRAM_SCAN_INFO_LOG_ENABLE == 1U)
+  printf("[PSRAM][FULL] begin size=%lu chunk=%lu patterns=3 base=0x%08lX\r\n",
+         (unsigned long)BSP_XSPI_RAM_SIZE_BYTES,
+         (unsigned long)PSRAM_FULL_SCAN_CHUNK_BYTES,
+         (unsigned long)BSP_XSPI_RAM_MMP_BASE);
+#endif
+
+  for (p = 0U; p < 3U; p++)
+  {
+    uint32_t progress_mark = 0U;
+#if (PSRAM_SCAN_INFO_LOG_ENABLE == 1U)
+    printf("[PSRAM][FULL] pattern=%s start\r\n", pattern_name[p]);
+#endif
+
+    for (off = 0U; off < BSP_XSPI_RAM_SIZE_BYTES; off += PSRAM_FULL_SCAN_CHUNK_BYTES)
+    {
+      uint32_t chunk = BSP_XSPI_RAM_SIZE_BYTES - off;
+      int32_t ret;
+      int mismatch;
+      uint32_t first_idx = 0U;
+      uint8_t exp = 0U;
+      uint8_t got = 0U;
+
+      if (chunk > PSRAM_FULL_SCAN_CHUNK_BYTES)
+      {
+        chunk = PSRAM_FULL_SCAN_CHUNK_BYTES;
+      }
+
+      PSRAM_FillPatternWithOffset(g_psram_full_wr, chunk, p, off);
+      memset(g_psram_full_rd, 0, chunk);
+
+      ret = BSP_XSPI_RAM_Write(0U, g_psram_full_wr, off, chunk);
+      if (ret != BSP_ERROR_NONE)
+      {
+        fail_chunks++;
+        mismatch_bytes += chunk;
+        if (fail_logs < max_fail_logs)
+        {
+          printf("[PSRAM][FULL][ERR] write off=0x%08lX len=%lu ret=%ld\r\n",
+                 (unsigned long)off, (unsigned long)chunk, (long)ret);
+          fail_logs++;
+        }
+        continue;
+      }
+
+      ret = BSP_XSPI_RAM_Read(0U, g_psram_full_rd, off, chunk);
+      if (ret != BSP_ERROR_NONE)
+      {
+        fail_chunks++;
+        mismatch_bytes += chunk;
+        if (fail_logs < max_fail_logs)
+        {
+          printf("[PSRAM][FULL][ERR] read off=0x%08lX len=%lu ret=%ld\r\n",
+                 (unsigned long)off, (unsigned long)chunk, (long)ret);
+          fail_logs++;
+        }
+        continue;
+      }
+
+      mismatch = PSRAM_CompareChunk(g_psram_full_wr, g_psram_full_rd, chunk, &first_idx, &exp, &got);
+      if (mismatch != 0)
+      {
+        fail_chunks++;
+        mismatch_bytes += (uint32_t)mismatch;
+        if (fail_logs < max_fail_logs)
+        {
+          printf("[PSRAM][FULL][ERR] cmp off=0x%08lX len=%lu mismatch=%d first_i=%lu exp=%02X got=%02X\r\n",
+                 (unsigned long)off,
+                 (unsigned long)chunk,
+                 mismatch,
+                 (unsigned long)first_idx,
+                 exp,
+                 got);
+          fail_logs++;
+        }
+      }
+
+      if ((PSRAM_SCAN_INFO_LOG_ENABLE == 1U) && ((off - progress_mark) >= PSRAM_FULL_SCAN_PROGRESS_STEP))
+      {
+        progress_mark = off;
+        printf("[PSRAM][FULL] pattern=%s progress=%lu/%luMB\r\n",
+               pattern_name[p],
+               (unsigned long)(off / (1024U * 1024U)),
+               (unsigned long)(BSP_XSPI_RAM_SIZE_BYTES / (1024U * 1024U)));
+      }
+    }
+
+#if (PSRAM_SCAN_INFO_LOG_ENABLE == 1U)
+    printf("[PSRAM][FULL] pattern=%s done fail_chunks=%lu mismatch_bytes=%lu\r\n",
+           pattern_name[p],
+           (unsigned long)fail_chunks,
+           (unsigned long)mismatch_bytes);
+#endif
+  }
+
+  g_psram_fullscan_bytes = BSP_XSPI_RAM_SIZE_BYTES;
+  g_psram_fullscan_fail_chunks = fail_chunks;
+  g_psram_fullscan_mismatch_bytes = mismatch_bytes;
+
+  if ((g_psram_fullscan_fail_chunks != 0U) || (g_psram_fullscan_mismatch_bytes != 0U) ||
+      (PSRAM_SCAN_INFO_LOG_ENABLE == 1U))
+  {
+    printf("[PSRAM][FULL] summary size=%lu fail_chunks=%lu mismatch_bytes=%lu\r\n",
+           (unsigned long)g_psram_fullscan_bytes,
+           (unsigned long)g_psram_fullscan_fail_chunks,
+           (unsigned long)g_psram_fullscan_mismatch_bytes);
+  }
+}
+
+static void PSRAM_MMP_ReadScanDebugProbe(uint32_t expected_pattern_id)
+{
+  static const uint32_t max_fail_logs = 16U;
+  uint32_t off;
+  uint32_t fail_chunks = 0U;
+  uint32_t mismatch_bytes = 0U;
+  uint32_t fail_logs = 0U;
+
+#if (PSRAM_SCAN_INFO_LOG_ENABLE == 1U)
+  printf("[PSRAM][MMPFULL] begin size=%lu chunk=%lu expected_pattern=%lu base=0x%08lX\r\n",
+         (unsigned long)BSP_XSPI_RAM_SIZE_BYTES,
+         (unsigned long)PSRAM_FULL_SCAN_CHUNK_BYTES,
+         (unsigned long)expected_pattern_id,
+         (unsigned long)BSP_XSPI_RAM_MMP_BASE);
+#endif
+
+  for (off = 0U; off < BSP_XSPI_RAM_SIZE_BYTES; off += PSRAM_FULL_SCAN_CHUNK_BYTES)
+  {
+    uint32_t chunk = BSP_XSPI_RAM_SIZE_BYTES - off;
+    volatile uint8_t *mmp = (volatile uint8_t *)(BSP_XSPI_RAM_MMP_BASE + off);
+    uintptr_t cache_addr;
+    int32_t cache_len;
+    int mismatch;
+    uint32_t first_idx = 0U;
+    uint8_t exp = 0U;
+    uint8_t got = 0U;
+    uint32_t i;
+
+    if (chunk > PSRAM_FULL_SCAN_CHUNK_BYTES)
+    {
+      chunk = PSRAM_FULL_SCAN_CHUNK_BYTES;
+    }
+
+    cache_addr = ((uintptr_t)mmp) & ~(uintptr_t)31U;
+    cache_len = (int32_t)(((((uintptr_t)mmp - cache_addr) + chunk) + 31U) & ~(uintptr_t)31U);
+
+#if defined(USE_DCACHE)
+    SCB_InvalidateDCache_by_Addr((uint32_t *)cache_addr, cache_len);
+    __DSB();
+    __ISB();
+#endif
+
+    for (i = 0U; i < chunk; i++)
+    {
+      g_psram_full_rd[i] = mmp[i];
+    }
+
+    PSRAM_FillPatternWithOffset(g_psram_full_wr, chunk, expected_pattern_id, off);
+    mismatch = PSRAM_CompareChunk(g_psram_full_wr, g_psram_full_rd, chunk, &first_idx, &exp, &got);
+
+    if (mismatch != 0)
+    {
+      fail_chunks++;
+      mismatch_bytes += (uint32_t)mismatch;
+      if (fail_logs < max_fail_logs)
+      {
+        printf("[PSRAM][MMPFULL][ERR] off=0x%08lX len=%lu mismatch=%d first_i=%lu exp=%02X got=%02X\r\n",
+               (unsigned long)off,
+               (unsigned long)chunk,
+               mismatch,
+               (unsigned long)first_idx,
+               exp,
+               got);
+        fail_logs++;
+      }
+    }
+  }
+
+  if ((fail_chunks != 0U) || (mismatch_bytes != 0U) || (PSRAM_SCAN_INFO_LOG_ENABLE == 1U))
+  {
+    printf("[PSRAM][MMPFULL] summary fail_chunks=%lu mismatch_bytes=%lu\r\n",
+           (unsigned long)fail_chunks,
+           (unsigned long)mismatch_bytes);
+  }
+}
+
 static void PSRAM_DebugProbe(void)
 {
   static const char *pattern_name[3] = {"INC", "ALT55AA", "WALK1"};
@@ -545,6 +849,115 @@ static void PSRAM_MMP_DebugProbe(void)
   printf("[PSRAM][MMP] verify mismatch(total)=%d\r\n", mismatch_total);
 }
 
+#if (PSRAM_WINDOW_ALIAS_TEST_ENABLE == 1U)
+static void PSRAM_AliasDebugProbe(void)
+{
+  static const char *pattern_name90[3] = {"WIN90-INC", "WIN90-ALT55AA", "WIN90-WALK1"};
+  static const char *pattern_name91[3] = {"WIN91-INC", "WIN91-ALT55AA", "WIN91-WALK1"};
+  static const uint32_t probe_addrs[2] = {0x00100000U, 0x00049800U};
+  uint8_t wr[256];
+  uint8_t rd90[256];
+  uint8_t rd91[256];
+  uint32_t aidx;
+  int mismatch_total = 0;
+  int independent_count = 0;
+  int failed_count = 0;
+
+  printf("[PSRAM][WIN] begin base90=0x%08lX base91=0x91000000 len=%lu\r\n",
+         (unsigned long)XSPI1_BASE,
+         (unsigned long)sizeof(wr));
+
+  for (aidx = 0U; aidx < 2U; aidx++)
+  {
+    uint32_t p;
+    uint32_t off = probe_addrs[aidx];
+    volatile uint8_t *m90 = (volatile uint8_t *)(XSPI1_BASE + off);
+    volatile uint8_t *m91 = (volatile uint8_t *)(0x91000000UL + off);
+    uintptr_t c90 = ((uintptr_t)m90) & ~(uintptr_t)31U;
+    uintptr_t c91 = ((uintptr_t)m91) & ~(uintptr_t)31U;
+    int32_t clen = 288; /* cover 256-byte sample with line alignment margin */
+
+    printf("[PSRAM][WIN] off=0x%08lX p90=0x%08lX p91=0x%08lX\r\n",
+           (unsigned long)off,
+           (unsigned long)(XSPI1_BASE + off),
+           (unsigned long)(0x91000000UL + off));
+
+    for (p = 0U; p < 3U; p++)
+    {
+      uint32_t i;
+      int mismatch90;
+      int mismatch91;
+      int independent;
+
+      /* Keep same pattern on both windows; validate each window independently first. */
+      PSRAM_FillPattern(wr, sizeof(wr), p);
+
+      for (i = 0U; i < sizeof(wr); i++)
+      {
+        m90[i] = wr[i];
+      }
+
+#if defined(USE_DCACHE)
+      SCB_CleanDCache_by_Addr((uint32_t *)c90, clen);
+      __DSB();
+      SCB_InvalidateDCache_by_Addr((uint32_t *)c90, clen);
+      __DSB();
+      __ISB();
+#endif
+
+      for (i = 0U; i < sizeof(wr); i++)
+      {
+        rd90[i] = m90[i];
+      }
+
+      /* Write/read 0x91 window in a separate pass to avoid cross-side effects while diagnosing. */
+      for (i = 0U; i < sizeof(wr); i++)
+      {
+        m91[i] = wr[i];
+      }
+
+#if defined(USE_DCACHE)
+      SCB_CleanDCache_by_Addr((uint32_t *)c91, clen);
+      __DSB();
+      SCB_InvalidateDCache_by_Addr((uint32_t *)c91, clen);
+      __DSB();
+      __ISB();
+#endif
+
+      for (i = 0U; i < sizeof(wr); i++)
+      {
+        rd91[i] = m91[i];
+      }
+
+      mismatch90 = PSRAM_CompareAndLog(pattern_name90[p], wr, rd90, sizeof(wr));
+      mismatch91 = PSRAM_CompareAndLog(pattern_name91[p], wr, rd91, sizeof(wr));
+      mismatch_total += mismatch90;
+      mismatch_total += mismatch91;
+
+      independent = ((mismatch90 == 0) && (mismatch91 == 0)) ? 1 : 0;
+
+      if (independent != 0)
+      {
+        independent_count++;
+      }
+      else
+      {
+        failed_count++;
+      }
+
+      printf("[PSRAM][WIN] mode p=%lu independent=%d\r\n",
+             (unsigned long)p,
+             independent);
+    }
+  }
+
+  printf("[PSRAM][WIN] summary mismatch(total)=%d independent=%d failed=%d\r\n",
+         mismatch_total,
+         independent_count,
+         failed_count);
+}
+#endif
+
 static int main_freertos()
 {
   TaskHandle_t hdl;
@@ -593,16 +1006,71 @@ static void main_thread_fct(void *arg)
   /*** External RAM and NOR Flash *********************************************/
   ret = BSP_XSPI_RAM_Init(0);
   g_psram_init_ret = ret;
-  printf("[PSRAM] Init ret=%d\r\n", ret);
+  if ((ret != BSP_ERROR_NONE) || (PSRAM_SCAN_INFO_LOG_ENABLE == 1U))
+  {
+    printf("[PSRAM] Init ret=%d\r\n", ret);
+  }
+  if (ret != BSP_ERROR_NONE)
+  {
+    printf("[PSRAM] STOP: init failed, abort boot.\r\n");
+    while (1)
+    {
+      HAL_Delay(1000);
+    }
+  }
   if (ret == BSP_ERROR_NONE)
   {
+#if (PSRAM_QUICK_PROBE_ENABLE == 1U)
     PSRAM_DebugProbe();
+#endif
+#if (PSRAM_FULL_SCAN_ENABLE == 1U)
+    PSRAM_FullScanDebugProbe();
+#endif
     ret = BSP_XSPI_RAM_EnableMemoryMappedMode(0);
     g_psram_mmp_ret = ret;
-    printf("[PSRAM] MMP enable ret=%d\r\n", ret);
+    if ((ret != BSP_ERROR_NONE) || (PSRAM_SCAN_INFO_LOG_ENABLE == 1U))
+    {
+      printf("[PSRAM] MMP enable ret=%d\r\n", ret);
+    }
     if (ret == BSP_ERROR_NONE)
     {
+#if ((PSRAM_W958_YUV_TEST_ENABLE == 1U) && (BSP_XSPI_RAM_USE_W958D6NBKX == 1U))
+      {
+        int32_t yuv_ret = BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(0U);
+        if (yuv_ret != BSP_ERROR_NONE)
+        {
+          printf("[PSRAM][YUVTEST] FAIL ret=%ld\r\n", (long)yuv_ret);
+        }
+        else
+        {
+          printf("[PSRAM][YUVTEST] PASS\r\n");
+        }
+      }
+#endif
+
+#if (PSRAM_QUICK_PROBE_ENABLE == 1U)
       PSRAM_MMP_DebugProbe();
+#endif
+#if (PSRAM_MMP_READ_SCAN_ENABLE == 1U)
+      /* Full MMP read-back expects data left by FULL scan last pattern (WALK1, id=2). */
+      PSRAM_MMP_ReadScanDebugProbe(2U);
+#endif
+#if (PSRAM_WINDOW_ALIAS_TEST_ENABLE == 1U)
+      PSRAM_AliasDebugProbe();
+#else
+      if (PSRAM_SCAN_INFO_LOG_ENABLE == 1U)
+      {
+        printf("[PSRAM][WIN] skipped (enable PSRAM_WINDOW_ALIAS_TEST_ENABLE=1 to run)\r\n");
+      }
+#endif
+    }
+    else
+    {
+      printf("[PSRAM] STOP: MMP enable failed, abort boot.\r\n");
+      while (1)
+      {
+        HAL_Delay(1000);
+      }
     }
   }
 
