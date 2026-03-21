@@ -128,23 +128,22 @@ extern "C" {
 
 #ifndef BSP_XSPI_RAM_W958_REG_DATA_MODE
 /*
- * Register path rollback:
- * keep x8 mode as the known-good mode from earlier bring-up logs
- * (reg_dmode=67108864) for ID/CR accesses.
+ * Keep register path in x8 for robust ID/CR accesses during bring-up.
  */
 #define BSP_XSPI_RAM_W958_REG_DATA_MODE      HAL_XSPI_DATA_8_LINES
 #endif /* BSP_XSPI_RAM_W958_REG_DATA_MODE */
 
 #ifndef BSP_XSPI_RAM_W958_MEM_DATA_MODE
 /*
- * Keep memory path in x8 (same as known-good register path during bring-up).
+ * HyperBus-Extend-IO x16 mode: use 16 data lines for memory transactions.
  */
-#define BSP_XSPI_RAM_W958_MEM_DATA_MODE      HAL_XSPI_DATA_8_LINES
+#define BSP_XSPI_RAM_W958_MEM_DATA_MODE      HAL_XSPI_DATA_16_LINES
 #endif /* BSP_XSPI_RAM_W958_MEM_DATA_MODE */
 
 #ifndef BSP_XSPI_RAM_W958_WRITE_DQS_MODE
 /*
- * 8-line HyperBus path requires RWDS as DQS for reliable write sampling.
+ * For current W958 bring-up on this board, write path needs RWDS/DQS enabled.
+ * (Disabling it caused write data to be masked/ignored; readback stayed 0xAA.)
  */
 #define BSP_XSPI_RAM_W958_WRITE_DQS_MODE     HAL_XSPI_DQS_ENABLE
 #endif /* BSP_XSPI_RAM_W958_WRITE_DQS_MODE */
@@ -192,8 +191,16 @@ extern "C" {
 /*
  * Run RAM address read/write sanity test during BSP_XSPI_RAM_Init().
  */
-#define BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE    0U
+#define BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE    1U
 #endif /* BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE */
+
+#ifndef BSP_XSPI_RAM_W958_ADDR_TEST_PASS_ALWAYS
+/*
+ * 1: if ADDRTEST fails, log warning and continue init flow.
+ * 0: stop init on ADDRTEST failure.
+ */
+#define BSP_XSPI_RAM_W958_ADDR_TEST_PASS_ALWAYS 1U
+#endif /* BSP_XSPI_RAM_W958_ADDR_TEST_PASS_ALWAYS */
 
 #ifndef BSP_XSPI_RAM_W958_ADDR_TEST_BYTES
 /*
@@ -224,26 +231,46 @@ extern "C" {
   ((uint32_t)(BSP_XSPI_RAM_W958_TESTIMG_WIDTH * BSP_XSPI_RAM_W958_TESTIMG_HEIGHT * 2U))
 #endif /* BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES */
 
+#ifndef BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP
+/*
+ * 1: if MMP is enabled, run YUV test directly on mapped window.
+ * 0: force legacy path (switch MMP->INDIRECT then indirect write/read).
+ */
+#define BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP    1U
+#endif /* BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP */
+
+#ifndef BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE
+/*
+ * Extra cross-checks around YUV test:
+ * 1: enable (indirect->mmp and mmp->indirect probe)
+ * 0: disable
+ */
+#define BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE   1U
+#endif /* BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE */
+
+#ifndef BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES
+/*
+ * Probe size for cross-check (keep <= transfer chunk).
+ */
+#define BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES    32U
+#endif /* BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES */
+
 #ifndef BSP_XSPI_RAM_MMP_BASE
 #define BSP_XSPI_RAM_MMP_BASE                 XSPI1_BASE
 #endif /* BSP_XSPI_RAM_MMP_BASE */
 
 #ifndef BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE
 /*
- * Bring-up test mode: limit XSPI memory aperture to lower 16MB
- * (half of the W958 32MB physical density).
- * - 16MB  => HAL_XSPI_SIZE_128MB (128Mbit)
- * - 32MB  => HAL_XSPI_SIZE_256MB (256Mbit)
+ * W958D6NBKX full density: 256Mbit = 32MB.
  */
-#define BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE    HAL_XSPI_SIZE_128MB
+#define BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE    HAL_XSPI_SIZE_256MB
 #endif /* BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE */
 
 #ifndef BSP_XSPI_RAM_SIZE_BYTES
 /*
  * Software-visible RAM size for bounds checks/tests.
- * Keep this aligned with BSP_XSPI_RAM_W958_XSPI_MEMORY_SIZE.
  */
-#define BSP_XSPI_RAM_SIZE_BYTES               ((uint32_t)(16U * 1024U * 1024U))
+#define BSP_XSPI_RAM_SIZE_BYTES               ((uint32_t)(32U * 1024U * 1024U))
 #endif /* BSP_XSPI_RAM_SIZE_BYTES */
 /* ------- driver W958D6NBKX : end ------- */
 

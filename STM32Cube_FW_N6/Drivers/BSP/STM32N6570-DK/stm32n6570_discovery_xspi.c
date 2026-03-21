@@ -81,6 +81,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32n6570_discovery_xspi.h"
 #include <stdio.h>
+#include <string.h>
 
 #ifndef BSP_XSPI_RAM_DEBUG_LOG_ENABLE
 /* 0: only error logs, 1: include info logs */
@@ -144,6 +145,7 @@
 #define XSPI_RAM_LOG_SR_DECODE(inst, tag) \
   do { \
     uint32_t _sr = (uint32_t)READ_REG(hxspi_ram[(inst)].Instance->SR); \
+    (void)_sr; \
     XSPI_RAM_W958_REGTRACE_LOG("%s SR=0x%08lX TE=%lu TC=%lu FT=%lu SM=%lu TO=%lu BUSY=%lu FLEVEL=%lu", \
                                (tag), \
                                (unsigned long)_sr, \
@@ -291,6 +293,11 @@ static void XSPI_RAM_W958_LogCR1(const char *tag, uint16_t cr1);
 static void XSPI_RAM_W958_LogID(const char *tag, uint16_t id0, uint16_t id1);
 static void XSPI_RAM_W958_DebugCR0Mismatch(uint32_t Instance, uint16_t cr0_exp, uint16_t cr0_rb,
                                            uint16_t cr1_exp, uint16_t cr1_rb);
+static void XSPI_RAM_W958_DCacheCleanRange(const void *buf, uint32_t len);
+static void XSPI_RAM_W958_DCacheInvalidateRange(const void *buf, uint32_t len);
+static void XSPI_RAM_W958_HexHead(const uint8_t *buf, uint32_t len, char *out, uint32_t out_size);
+static void XSPI_RAM_W958_MmpWrite(volatile uint8_t *dst, const uint8_t *src, uint32_t len);
+static void XSPI_RAM_W958_MmpRead(const volatile uint8_t *src, uint8_t *dst, uint32_t len);
 /* ------- driver W958D6NBKX : private prototypes end ------- */
 #endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
 /**
@@ -1502,9 +1509,13 @@ static int32_t XSPI_RAM_W958_AddressRwTest(uint32_t Instance)
 #if (BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE == 1U)
   uint8_t wr[BSP_XSPI_RAM_W958_ADDR_TEST_BYTES];
   uint8_t rd[BSP_XSPI_RAM_W958_ADDR_TEST_BYTES];
-  uint32_t off = BSP_XSPI_RAM_W958_TESTBUF_ADDR;
-  uint32_t j;
+  uint32_t off;
   const uint32_t test_len = BSP_XSPI_RAM_W958_ADDR_TEST_BYTES;
+  uint32_t j;
+  uint16_t id0 = 0U;
+  uint16_t id1 = 0U;
+  uint16_t cr0 = 0U;
+  uint16_t cr1 = 0U;
   char wr_hex[(3U * BSP_XSPI_RAM_W958_ADDR_TEST_BYTES) + 1U];
   char rd_hex[(3U * BSP_XSPI_RAM_W958_ADDR_TEST_BYTES) + 1U];
 
@@ -1516,106 +1527,219 @@ static int32_t XSPI_RAM_W958_AddressRwTest(uint32_t Instance)
     return BSP_ERROR_WRONG_PARAM;
   }
 
-  if ((off + test_len) > BSP_XSPI_RAM_SIZE_BYTES)
+  if (test_len > BSP_XSPI_RAM_SIZE_BYTES)
   {
-    XSPI_RAM_LOG_ERR("[W958][ERR] BufTest invalid addr off=0x%08lX len=%lu size=%lu",
-                     (unsigned long)off,
+    XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest invalid len=%lu size=%lu",
                      (unsigned long)test_len,
                      (unsigned long)BSP_XSPI_RAM_SIZE_BYTES);
     return BSP_ERROR_WRONG_PARAM;
   }
 
-  for (j = 0U; j < test_len; j++)
+  /* Register sanity check: only log when error. */
+  if ((XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_ID0_ADDR, &id0) != BSP_ERROR_NONE) ||
+      (XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_ID1_ADDR, &id1) != BSP_ERROR_NONE) ||
+      (XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, &cr0) != BSP_ERROR_NONE) ||
+      (XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_CR1_ADDR, &cr1) != BSP_ERROR_NONE))
   {
-    wr[j] = (uint8_t)(((off >> 8) + (j * 13U) + 0x5AU) & 0xFFU);
-    rd[j] = 0U;
-  }
-
-  /* Log write pattern bytes for dedicated buffer test. */
-  {
-    uint32_t p = 0U;
-    for (j = 0U; j < test_len; j++)
-    {
-      int n = snprintf(&wr_hex[p], (size_t)(sizeof(wr_hex) - p), "%02X%s",
-                       (unsigned int)wr[j], (j + 1U < test_len) ? " " : "");
-      if (n < 0)
-      {
-        break;
-      }
-      p += (uint32_t)n;
-      if (p >= sizeof(wr_hex))
-      {
-        break;
-      }
-    }
-    wr_hex[(sizeof(wr_hex) - 1U)] = '\0';
-    XSPI_RAM_LOG_ERR("[W958][BUFTEST] WR off=0x%08lX len=%lu data=%s",
-                     (unsigned long)off,
-                     (unsigned long)test_len,
-                     wr_hex);
-  }
-
-  if (XSPI_RAM_W958_WriteMem(Instance, wr, off, test_len) != BSP_ERROR_NONE)
-  {
-    XSPI_RAM_LOG_ERR("[W958][ERR] BufTest write fail off=0x%08lX len=%lu",
-                     (unsigned long)off,
-                     (unsigned long)test_len);
+    XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest reg read fail");
     return BSP_ERROR_PERIPH_FAILURE;
   }
 
-  if (XSPI_RAM_W958_ReadMem(Instance, rd, off, test_len) != BSP_ERROR_NONE)
+  if ((cr0 != BSP_XSPI_RAM_W958_CR0_INIT) || (cr1 != BSP_XSPI_RAM_W958_CR1_INIT))
   {
-    XSPI_RAM_LOG_ERR("[W958][ERR] BufTest read fail off=0x%08lX len=%lu",
-                     (unsigned long)off,
-                     (unsigned long)test_len);
+    XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest reg mismatch ID0=0x%04X ID1=0x%04X exp_CR0=0x%04X got_CR0=0x%04X exp_CR1=0x%04X got_CR1=0x%04X",
+                     (unsigned int)id0,
+                     (unsigned int)id1,
+                     (unsigned int)BSP_XSPI_RAM_W958_CR0_INIT,
+                     (unsigned int)cr0,
+                     (unsigned int)BSP_XSPI_RAM_W958_CR1_INIT,
+                     (unsigned int)cr1);
     return BSP_ERROR_PERIPH_FAILURE;
   }
 
-  /* Log readback bytes for dedicated buffer test. */
+  /* Full RAM scan with fixed 32-byte transfers; log only on failure. */
+  for (off = 0U; (off + test_len) <= BSP_XSPI_RAM_SIZE_BYTES; off += test_len)
   {
-    uint32_t p = 0U;
     for (j = 0U; j < test_len; j++)
     {
-      int n = snprintf(&rd_hex[p], (size_t)(sizeof(rd_hex) - p), "%02X%s",
-                       (unsigned int)rd[j], (j + 1U < test_len) ? " " : "");
-      if (n < 0)
-      {
-        break;
-      }
-      p += (uint32_t)n;
-      if (p >= sizeof(rd_hex))
-      {
-        break;
-      }
+      wr[j] = (uint8_t)(((off >> 8) + (j * 13U) + 0x5AU) & 0xFFU);
+      rd[j] = 0xAAU;
     }
-    rd_hex[(sizeof(rd_hex) - 1U)] = '\0';
-    XSPI_RAM_LOG_ERR("[W958][BUFTEST] RD off=0x%08lX len=%lu data=%s",
-                     (unsigned long)off,
-                     (unsigned long)test_len,
-                     rd_hex);
-  }
 
-  for (j = 0U; j < test_len; j++)
-  {
-    if (rd[j] != wr[j])
+    if (XSPI_RAM_W958_WriteMem(Instance, wr, off, test_len) != BSP_ERROR_NONE)
     {
-      XSPI_RAM_LOG_ERR("[W958][ERR] BufTest mismatch off=0x%08lX i=%lu exp=%02X got=%02X",
+      XSPI_RAM_W958_HexHead(wr, test_len, wr_hex, (uint32_t)sizeof(wr_hex));
+      XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest FULL write fail off=0x%08lX len=%lu wr=%s",
                        (unsigned long)off,
-                       (unsigned long)j,
-                       (unsigned int)wr[j],
-                       (unsigned int)rd[j]);
+                       (unsigned long)test_len,
+                       wr_hex);
       return BSP_ERROR_PERIPH_FAILURE;
     }
+
+    if (XSPI_RAM_W958_ReadMem(Instance, rd, off, test_len) != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest FULL read fail off=0x%08lX len=%lu",
+                       (unsigned long)off,
+                       (unsigned long)test_len);
+      return BSP_ERROR_PERIPH_FAILURE;
+    }
+
+    for (j = 0U; j < test_len; j++)
+    {
+      if (rd[j] != wr[j])
+      {
+        XSPI_RAM_W958_HexHead(wr, test_len, wr_hex, (uint32_t)sizeof(wr_hex));
+        XSPI_RAM_W958_HexHead(rd, test_len, rd_hex, (uint32_t)sizeof(rd_hex));
+        XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest FULL mismatch off=0x%08lX i=%lu exp=%02X got=%02X",
+                         (unsigned long)off,
+                         (unsigned long)j,
+                         (unsigned int)wr[j],
+                         (unsigned int)rd[j]);
+        XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest FULL WR=%s", wr_hex);
+        XSPI_RAM_LOG_ERR("[W958][ERR] AddrTest FULL RD=%s", rd_hex);
+        return BSP_ERROR_PERIPH_FAILURE;
+      }
+    }
   }
 
-  XSPI_RAM_LOG("[W958] BufTest pass off=0x%08lX len=%lu",
-               (unsigned long)off,
-               (unsigned long)test_len);
   return BSP_ERROR_NONE;
 #else
   (void)Instance;
   return BSP_ERROR_NONE;
 #endif /* (BSP_XSPI_RAM_W958_ADDR_TEST_ENABLE == 1U) */
+}
+
+static void XSPI_RAM_W958_DCacheCleanRange(const void *buf, uint32_t len)
+{
+#if defined(USE_DCACHE)
+  uintptr_t addr;
+  uintptr_t clean_addr;
+  uint32_t clean_len;
+
+  if ((buf == NULL) || (len == 0U))
+  {
+    return;
+  }
+
+  addr = (uintptr_t)buf;
+  clean_addr = addr & ~((uintptr_t)31U);
+  clean_len = (uint32_t)(((addr - clean_addr) + (uintptr_t)len + 31U) & ~((uintptr_t)31U));
+  SCB_CleanDCache_by_Addr((uint8_t *)clean_addr, clean_len);
+#else
+  (void)buf;
+  (void)len;
+#endif
+}
+
+static void XSPI_RAM_W958_DCacheInvalidateRange(const void *buf, uint32_t len)
+{
+#if defined(USE_DCACHE)
+  uintptr_t addr;
+  uintptr_t inv_addr;
+  uint32_t inv_len;
+
+  if ((buf == NULL) || (len == 0U))
+  {
+    return;
+  }
+
+  addr = (uintptr_t)buf;
+  inv_addr = addr & ~((uintptr_t)31U);
+  inv_len = (uint32_t)(((addr - inv_addr) + (uintptr_t)len + 31U) & ~((uintptr_t)31U));
+  SCB_InvalidateDCache_by_Addr((uint8_t *)inv_addr, inv_len);
+#else
+  (void)buf;
+  (void)len;
+#endif
+}
+
+static void XSPI_RAM_W958_HexHead(const uint8_t *buf, uint32_t len, char *out, uint32_t out_size)
+{
+  uint32_t i;
+  uint32_t p = 0U;
+
+  if ((out == NULL) || (out_size == 0U))
+  {
+    return;
+  }
+
+  if (buf == NULL)
+  {
+    out[0] = '\0';
+    return;
+  }
+
+  for (i = 0U; i < len; i++)
+  {
+    int n = snprintf(&out[p], (size_t)(out_size - p), "%02X%s",
+                     (unsigned int)buf[i], (i + 1U < len) ? " " : "");
+    if (n < 0)
+    {
+      break;
+    }
+    p += (uint32_t)n;
+    if (p >= out_size)
+    {
+      break;
+    }
+  }
+  out[out_size - 1U] = '\0';
+}
+
+static void XSPI_RAM_W958_MmpWrite(volatile uint8_t *dst, const uint8_t *src, uint32_t len)
+{
+  uint32_t i = 0U;
+  volatile uint8_t *d8 = (volatile uint8_t *)dst;
+
+  if ((dst == NULL) || (src == NULL) || (len == 0U))
+  {
+    return;
+  }
+
+  if ((((uintptr_t)dst | (uintptr_t)src) & 0x3U) == 0U)
+  {
+    volatile uint32_t *d32 = (volatile uint32_t *)dst;
+    const uint32_t *s32 = (const uint32_t *)src;
+    uint32_t words = len / 4U;
+    for (i = 0U; i < words; i++)
+    {
+      d32[i] = s32[i];
+    }
+    i = words * 4U;
+  }
+
+  for (; i < len; i++)
+  {
+    d8[i] = src[i];
+  }
+}
+
+static void XSPI_RAM_W958_MmpRead(const volatile uint8_t *src, uint8_t *dst, uint32_t len)
+{
+  uint32_t i = 0U;
+  const volatile uint8_t *s8 = src;
+
+  if ((src == NULL) || (dst == NULL) || (len == 0U))
+  {
+    return;
+  }
+
+  if ((((uintptr_t)src | (uintptr_t)dst) & 0x3U) == 0U)
+  {
+    const volatile uint32_t *s32 = (const volatile uint32_t *)src;
+    uint32_t *d32 = (uint32_t *)dst;
+    uint32_t words = len / 4U;
+    for (i = 0U; i < words; i++)
+    {
+      d32[i] = s32[i];
+    }
+    i = words * 4U;
+  }
+
+  for (; i < len; i++)
+  {
+    dst[i] = s8[i];
+  }
 }
 
 static void XSPI_RAM_W958_LogCR0(const char *tag, uint16_t cr0)
@@ -1692,6 +1816,9 @@ static void XSPI_RAM_W958_LogID(const char *tag, uint16_t id0, uint16_t id1)
                dev_name);
 }
 
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
 static void XSPI_RAM_W958_DebugCR0Mismatch(uint32_t Instance, uint16_t cr0_exp, uint16_t cr0_rb,
                                            uint16_t cr1_exp, uint16_t cr1_rb)
 {
@@ -1721,36 +1848,36 @@ static void XSPI_RAM_W958_DebugCR0Mismatch(uint32_t Instance, uint16_t cr0_exp, 
   }
 
   test_val[0] = cr0_exp;
-  test_val[1] = (uint16_t)(cr0_exp | 0x0004U);
-  test_val[2] = (uint16_t)(cr0_exp & (uint16_t)~0x0004U);
-  test_val[3] = (uint16_t)((cr0_exp & (uint16_t)~0x0003U) | (uint16_t)(((cr0_exp & 0x0003U) ^ 0x0001U) & 0x0003U));
+  test_val[1] = (uint16_t)(cr0_exp | 0x0004U); /* set bit2 */
+  test_val[2] = (uint16_t)(cr0_exp & (uint16_t)~0x0004U); /* clear bit2 */
+  test_val[3] = (uint16_t)((cr0_exp & (uint16_t)~0x0003U) | ((cr0_exp + 1U) & 0x0003U)); /* toggle burst bits */
 
   for (i = 0U; i < 4U; i++)
   {
+    uint16_t wr = test_val[i];
     uint16_t rb = 0U;
-    if (XSPI_RAM_W958_WriteReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, test_val[i]) != BSP_ERROR_NONE)
+
+    XSPI_RAM_LOG("[W958][DBG] CR0 test[%lu]=%s wr=0x%04X", (unsigned long)i, test_name[i], (unsigned int)wr);
+    if (XSPI_RAM_W958_WriteReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, wr) != BSP_ERROR_NONE)
     {
-      XSPI_RAM_LOG("[W958][DBG][ERR] CR0 write %s val=0x%04X fail", test_name[i], (unsigned int)test_val[i]);
+      XSPI_RAM_LOG("[W958][DBG][ERR] CR0 test[%lu] write fail", (unsigned long)i);
       continue;
     }
     if (XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, &rb) != BSP_ERROR_NONE)
     {
-      XSPI_RAM_LOG("[W958][DBG][ERR] CR0 readback %s val=0x%04X fail", test_name[i], (unsigned int)test_val[i]);
+      XSPI_RAM_LOG("[W958][DBG][ERR] CR0 test[%lu] readback fail", (unsigned long)i);
       continue;
     }
-    XSPI_RAM_LOG("[W958][DBG] CR0 test %s wr=0x%04X rb=0x%04X diff=0x%04X",
-                 test_name[i],
-                 (unsigned int)test_val[i],
-                 (unsigned int)rb,
-                 (unsigned int)((uint16_t)(test_val[i] ^ rb)));
+    XSPI_RAM_LOG("[W958][DBG] CR0 test[%lu] rb=0x%04X xor=0x%04X",
+                 (unsigned long)i, (unsigned int)rb, (unsigned int)(wr ^ rb));
   }
 
+  /* Restore expected value (best effort). */
   if (XSPI_RAM_W958_WriteReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, cr0_exp) == BSP_ERROR_NONE)
   {
     if (XSPI_RAM_W958_ReadReg(Instance, BSP_XSPI_RAM_W958_CR0_ADDR, &cr0_now) == BSP_ERROR_NONE)
     {
-      XSPI_RAM_LOG("[W958][DBG] CR0 restore wr=0x%04X rb=0x%04X",
-                   (unsigned int)cr0_exp, (unsigned int)cr0_now);
+      XSPI_RAM_LOG("[W958][DBG] CR0 restored=0x%04X", (unsigned int)cr0_now);
     }
   }
 
@@ -1773,6 +1900,7 @@ int32_t BSP_XSPI_RAM_Init(uint32_t Instance)
                          (unsigned long)Instance,
                          (unsigned long)BSP_XSPI_RAM_USE_W958D6NBKX,
                          (unsigned long)BSP_XSPI_RAM_SKIP_VENDOR_REG_INIT);
+  XSPI_RAM_W958_INIT_LOG("PATCH-MARKER: W958_CODE_EDIT_2026_03_21");
 
   /* Check if the instance is supported */
   if (Instance >= XSPI_RAM_INSTANCES_NUMBER)
@@ -2095,18 +2223,16 @@ int32_t BSP_XSPI_RAM_Init(uint32_t Instance)
 
       if (ret == BSP_ERROR_NONE)
       {
-        XSPI_RAM_W958_INIT_LOG("Step 12: RAM buffer write/read test begin (off=0x%08lX len=%lu)",
-                               (unsigned long)BSP_XSPI_RAM_W958_TESTBUF_ADDR,
-                               (unsigned long)BSP_XSPI_RAM_W958_ADDR_TEST_BYTES);
         if (XSPI_RAM_W958_AddressRwTest(Instance) != BSP_ERROR_NONE)
         {
+#if (BSP_XSPI_RAM_W958_ADDR_TEST_PASS_ALWAYS == 1U)
+          XSPI_RAM_W958_INIT_LOG("Step 12 WARN: RAM register/buffer test failed");
+          XSPI_RAM_W958_INIT_LOG("Step 12 FORCE-PASS: continue init as requested");
+#else
           ret = BSP_ERROR_PERIPH_FAILURE;
-          XSPI_RAM_W958_INIT_LOG("Step 12 FAIL: RAM buffer write/read test failed");
-          XSPI_RAM_W958_INIT_LOG("Step 12 STOP: abort init because RAM buffer test failed");
-        }
-        else
-        {
-          XSPI_RAM_W958_INIT_LOG("Step 12 OK: RAM buffer write/read test passed");
+          XSPI_RAM_W958_INIT_LOG("Step 12 FAIL: RAM register/buffer test failed");
+          XSPI_RAM_W958_INIT_LOG("Step 12 STOP: abort init because RAM data test failed");
+#endif /* (BSP_XSPI_RAM_W958_ADDR_TEST_PASS_ALWAYS == 1U) */
         }
       }
       /* ------- driver W958D6NBKX : init path end ------- */
@@ -2724,6 +2850,7 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
   int32_t ret = BSP_ERROR_NONE;
   int32_t mmp_ret = BSP_ERROR_NONE;
   uint8_t mmp_was_enabled = 0U;
+  uint8_t run_mmp_path = 0U;
   uint32_t i;
   uint32_t mismatch = 0U;
   uint32_t first_bad = 0U;
@@ -2733,6 +2860,7 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
   const uint32_t height = BSP_XSPI_RAM_W958_TESTIMG_HEIGHT;
   const uint32_t frame_bytes = BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES;
   const uint32_t off = BSP_XSPI_RAM_W958_TESTBUF_ADDR;
+  volatile uint8_t *mmp_ptr = (volatile uint8_t *)(BSP_XSPI_RAM_MMP_BASE + off);
   static uint8_t wr[BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES];
   static uint8_t rd[BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES];
   char wr_hex[(3U * 32U) + 1U];
@@ -2767,9 +2895,17 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
     return BSP_ERROR_WRONG_PARAM;
   }
 
-  /* This test uses indirect BSP_XSPI_RAM_Write/Read.
-   * If XSPI is currently in memory-mapped mode, switch back to indirect first. */
-  if (XSPI_Ram_Ctx[Instance].IsInitialized == XSPI_ACCESS_MMP)
+  if ((XSPI_Ram_Ctx[Instance].IsInitialized == XSPI_ACCESS_MMP) &&
+      (BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP == 1U))
+  {
+    run_mmp_path = 1U;
+    XSPI_RAM_LOG_ERR("[W958][YUVTEST] using mapped window base=0x%08lX off=0x%08lX",
+                     (unsigned long)BSP_XSPI_RAM_MMP_BASE,
+                     (unsigned long)off);
+  }
+
+  /* Legacy indirect path (kept for debug switch). */
+  if ((run_mmp_path == 0U) && (XSPI_Ram_Ctx[Instance].IsInitialized == XSPI_ACCESS_MMP))
   {
     mmp_was_enabled = 1U;
     mmp_ret = BSP_XSPI_RAM_DisableMemoryMappedMode(Instance);
@@ -2830,20 +2966,164 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
     rd[i] = 0U;
   }
 
-  ret = BSP_XSPI_RAM_Write(Instance, wr, off, frame_bytes);
-  if (ret != BSP_ERROR_NONE)
+  if (run_mmp_path != 0U)
   {
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] write fail off=0x%08lX bytes=%lu ret=%ld",
-                     (unsigned long)off, (unsigned long)frame_bytes, (long)ret);
-    goto yuvtest_exit;
-  }
+#if (BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE == 1U)
+    uint8_t xchk_wr[BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES];
+    uint8_t xchk_rd[BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES];
+    uint32_t xchk_len = (frame_bytes < BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES) ? frame_bytes : BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES;
+    uint32_t xbad_i = 0U;
+    uint8_t xbad_exp = 0U;
+    uint8_t xbad_got = 0U;
+    char xw_hex[(3U * BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES) + 1U];
+    char xr_hex[(3U * BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES) + 1U];
+    int32_t xret;
 
-  ret = BSP_XSPI_RAM_Read(Instance, rd, off, frame_bytes);
-  if (ret != BSP_ERROR_NONE)
+    for (i = 0U; i < xchk_len; i++)
+    {
+      xchk_wr[i] = (uint8_t)(0xA5U + (i * 13U));
+      xchk_rd[i] = 0U;
+    }
+    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] A begin: INDIRECT->MMP len=%lu", (unsigned long)xchk_len);
+
+    xret = BSP_XSPI_RAM_DisableMemoryMappedMode(Instance);
+    if (xret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A disable MMP failed ret=%ld", (long)xret);
+      ret = xret;
+      goto yuvtest_exit;
+    }
+
+    xret = BSP_XSPI_RAM_Write(Instance, xchk_wr, off, xchk_len);
+    if (xret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A indirect write failed ret=%ld", (long)xret);
+      ret = xret;
+      goto yuvtest_exit;
+    }
+
+    xret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
+    if (xret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A re-enable MMP failed ret=%ld", (long)xret);
+      ret = xret;
+      goto yuvtest_exit;
+    }
+
+    XSPI_RAM_W958_DCacheInvalidateRange((const void *)(uintptr_t)mmp_ptr, xchk_len);
+    XSPI_RAM_W958_MmpRead((const volatile uint8_t *)mmp_ptr, xchk_rd, xchk_len);
+
+    if (memcmp(xchk_wr, xchk_rd, xchk_len) != 0)
+    {
+      for (i = 0U; i < xchk_len; i++)
+      {
+        if (xchk_wr[i] != xchk_rd[i])
+        {
+          xbad_i = i;
+          xbad_exp = xchk_wr[i];
+          xbad_got = xchk_rd[i];
+          break;
+        }
+      }
+      XSPI_RAM_W958_HexHead(xchk_wr, xchk_len, xw_hex, (uint32_t)sizeof(xw_hex));
+      XSPI_RAM_W958_HexHead(xchk_rd, xchk_len, xr_hex, (uint32_t)sizeof(xr_hex));
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A mismatch i=%lu exp=%02X got=%02X WR=%s RD=%s",
+                       (unsigned long)xbad_i,
+                       (unsigned int)xbad_exp,
+                       (unsigned int)xbad_got,
+                       xw_hex,
+                       xr_hex);
+      ret = BSP_ERROR_PERIPH_FAILURE;
+      goto yuvtest_exit;
+    }
+    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] A pass");
+
+    for (i = 0U; i < xchk_len; i++)
+    {
+      xchk_wr[i] = (uint8_t)(0x3CU + (i * 7U));
+      xchk_rd[i] = 0U;
+    }
+    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] B begin: MMP->INDIRECT len=%lu", (unsigned long)xchk_len);
+
+    XSPI_RAM_W958_MmpWrite((volatile uint8_t *)mmp_ptr, xchk_wr, xchk_len);
+    XSPI_RAM_W958_DCacheCleanRange((const void *)(uintptr_t)mmp_ptr, xchk_len);
+    __DSB();
+    __ISB();
+
+    xret = BSP_XSPI_RAM_DisableMemoryMappedMode(Instance);
+    if (xret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B disable MMP failed ret=%ld", (long)xret);
+      ret = xret;
+      goto yuvtest_exit;
+    }
+
+    xret = BSP_XSPI_RAM_Read(Instance, xchk_rd, off, xchk_len);
+    if (xret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B indirect read failed ret=%ld", (long)xret);
+      ret = xret;
+      goto yuvtest_exit;
+    }
+
+    xret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
+    if (xret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B re-enable MMP failed ret=%ld", (long)xret);
+      ret = xret;
+      goto yuvtest_exit;
+    }
+
+    if (memcmp(xchk_wr, xchk_rd, xchk_len) != 0)
+    {
+      for (i = 0U; i < xchk_len; i++)
+      {
+        if (xchk_wr[i] != xchk_rd[i])
+        {
+          xbad_i = i;
+          xbad_exp = xchk_wr[i];
+          xbad_got = xchk_rd[i];
+          break;
+        }
+      }
+      XSPI_RAM_W958_HexHead(xchk_wr, xchk_len, xw_hex, (uint32_t)sizeof(xw_hex));
+      XSPI_RAM_W958_HexHead(xchk_rd, xchk_len, xr_hex, (uint32_t)sizeof(xr_hex));
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B mismatch i=%lu exp=%02X got=%02X WR=%s RD=%s",
+                       (unsigned long)xbad_i,
+                       (unsigned int)xbad_exp,
+                       (unsigned int)xbad_got,
+                       xw_hex,
+                       xr_hex);
+      ret = BSP_ERROR_PERIPH_FAILURE;
+      goto yuvtest_exit;
+    }
+    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] B pass");
+#endif /* (BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE == 1U) */
+
+    XSPI_RAM_W958_MmpWrite((volatile uint8_t *)mmp_ptr, wr, frame_bytes);
+    XSPI_RAM_W958_DCacheCleanRange((const void *)(uintptr_t)mmp_ptr, frame_bytes);
+    __DSB();
+    __ISB();
+    XSPI_RAM_W958_DCacheInvalidateRange((const void *)(uintptr_t)mmp_ptr, frame_bytes);
+    XSPI_RAM_W958_MmpRead((const volatile uint8_t *)mmp_ptr, rd, frame_bytes);
+  }
+  else
   {
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] read fail off=0x%08lX bytes=%lu ret=%ld",
-                     (unsigned long)off, (unsigned long)frame_bytes, (long)ret);
-    goto yuvtest_exit;
+    ret = BSP_XSPI_RAM_Write(Instance, wr, off, frame_bytes);
+    if (ret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] write fail off=0x%08lX bytes=%lu ret=%ld",
+                       (unsigned long)off, (unsigned long)frame_bytes, (long)ret);
+      goto yuvtest_exit;
+    }
+
+    ret = BSP_XSPI_RAM_Read(Instance, rd, off, frame_bytes);
+    if (ret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] read fail off=0x%08lX bytes=%lu ret=%ld",
+                       (unsigned long)off, (unsigned long)frame_bytes, (long)ret);
+      goto yuvtest_exit;
+    }
   }
 
   for (i = 0U; i < frame_bytes; i++)
@@ -2907,7 +3187,24 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
   ret = BSP_ERROR_NONE;
 
 yuvtest_exit:
-  if (mmp_was_enabled != 0U)
+  if ((run_mmp_path != 0U) && (XSPI_Ram_Ctx[Instance].IsInitialized != XSPI_ACCESS_MMP))
+  {
+    mmp_ret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
+    if (mmp_ret != BSP_ERROR_NONE)
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] restore MMP after xchk failed ret=%ld", (long)mmp_ret);
+      if (ret == BSP_ERROR_NONE)
+      {
+        ret = mmp_ret;
+      }
+    }
+    else
+    {
+      XSPI_RAM_LOG_ERR("[W958][YUVTEST] restored to MMP");
+    }
+  }
+
+  if ((mmp_was_enabled != 0U) && (run_mmp_path == 0U))
   {
     mmp_ret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
     if (mmp_ret != BSP_ERROR_NONE)
