@@ -2850,7 +2850,6 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
   int32_t ret = BSP_ERROR_NONE;
   int32_t mmp_ret = BSP_ERROR_NONE;
   uint8_t mmp_was_enabled = 0U;
-  uint8_t run_mmp_path = 0U;
   uint32_t i;
   uint32_t mismatch = 0U;
   uint32_t first_bad = 0U;
@@ -2860,7 +2859,7 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
   const uint32_t height = BSP_XSPI_RAM_W958_TESTIMG_HEIGHT;
   const uint32_t frame_bytes = BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES;
   const uint32_t off = BSP_XSPI_RAM_W958_TESTBUF_ADDR;
-  volatile uint8_t *mmp_ptr = (volatile uint8_t *)(BSP_XSPI_RAM_MMP_BASE + off);
+  const uint32_t verify_chunk_cfg = 32U;
   static uint8_t wr[BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES];
   static uint8_t rd[BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES];
   char wr_hex[(3U * 32U) + 1U];
@@ -2895,17 +2894,8 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
     return BSP_ERROR_WRONG_PARAM;
   }
 
-  if ((XSPI_Ram_Ctx[Instance].IsInitialized == XSPI_ACCESS_MMP) &&
-      (BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP == 1U))
-  {
-    run_mmp_path = 1U;
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST] using mapped window base=0x%08lX off=0x%08lX",
-                     (unsigned long)BSP_XSPI_RAM_MMP_BASE,
-                     (unsigned long)off);
-  }
-
-  /* Legacy indirect path (kept for debug switch). */
-  if ((run_mmp_path == 0U) && (XSPI_Ram_Ctx[Instance].IsInitialized == XSPI_ACCESS_MMP))
+  /* Force INDIRECT test mode: per 32-byte write/read/verify sequence. */
+  if (XSPI_Ram_Ctx[Instance].IsInitialized == XSPI_ACCESS_MMP)
   {
     mmp_was_enabled = 1U;
     mmp_ret = BSP_XSPI_RAM_DisableMemoryMappedMode(Instance);
@@ -2914,7 +2904,7 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
       XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] disable MMP failed ret=%ld", (long)mmp_ret);
       return mmp_ret;
     }
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST] switched MMP->INDIRECT");
+    XSPI_RAM_LOG_ERR("[W958][YUVTEST] switched MMP->INDIRECT (W32->R32 verify)");
   }
 
   XSPI_RAM_LOG_ERR("[W958][YUVTEST] begin off=0x%08lX w=%lu h=%lu bytes=%lu",
@@ -2966,177 +2956,81 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
     rd[i] = 0U;
   }
 
-  if (run_mmp_path != 0U)
   {
-#if (BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE == 1U)
-    uint8_t xchk_wr[BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES];
-    uint8_t xchk_rd[BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES];
-    uint32_t xchk_len = (frame_bytes < BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES) ? frame_bytes : BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES;
-    uint32_t xbad_i = 0U;
-    uint8_t xbad_exp = 0U;
-    uint8_t xbad_got = 0U;
-    char xw_hex[(3U * BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES) + 1U];
-    char xr_hex[(3U * BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES) + 1U];
-    int32_t xret;
+    uint32_t done = 0U;
+    uint32_t verify_chunk = verify_chunk_cfg;
 
-    for (i = 0U; i < xchk_len; i++)
+    if ((verify_chunk == 0U) || (verify_chunk > BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES))
     {
-      xchk_wr[i] = (uint8_t)(0xA5U + (i * 13U));
-      xchk_rd[i] = 0U;
-    }
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] A begin: INDIRECT->MMP len=%lu", (unsigned long)xchk_len);
-
-    xret = BSP_XSPI_RAM_DisableMemoryMappedMode(Instance);
-    if (xret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A disable MMP failed ret=%ld", (long)xret);
-      ret = xret;
-      goto yuvtest_exit;
+      verify_chunk = BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES;
     }
 
-    xret = BSP_XSPI_RAM_Write(Instance, xchk_wr, off, xchk_len);
-    if (xret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A indirect write failed ret=%ld", (long)xret);
-      ret = xret;
-      goto yuvtest_exit;
-    }
+    XSPI_RAM_LOG_ERR("[W958][YUVTEST] mode=INDIRECT interleave W%lu/R%lu total=%lu",
+                     (unsigned long)verify_chunk,
+                     (unsigned long)verify_chunk,
+                     (unsigned long)frame_bytes);
 
-    xret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
-    if (xret != BSP_ERROR_NONE)
+    while (done < frame_bytes)
     {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A re-enable MMP failed ret=%ld", (long)xret);
-      ret = xret;
-      goto yuvtest_exit;
-    }
+      uint32_t chunk = frame_bytes - done;
+      uint32_t j;
 
-    XSPI_RAM_W958_DCacheInvalidateRange((const void *)(uintptr_t)mmp_ptr, xchk_len);
-    XSPI_RAM_W958_MmpRead((const volatile uint8_t *)mmp_ptr, xchk_rd, xchk_len);
-
-    if (memcmp(xchk_wr, xchk_rd, xchk_len) != 0)
-    {
-      for (i = 0U; i < xchk_len; i++)
+      if (chunk > verify_chunk)
       {
-        if (xchk_wr[i] != xchk_rd[i])
+        chunk = verify_chunk;
+      }
+
+      ret = BSP_XSPI_RAM_Write(Instance, &wr[done], off + done, chunk);
+      if (ret != BSP_ERROR_NONE)
+      {
+        XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] W fail off=0x%08lX len=%lu done=%lu/%lu ret=%ld",
+                         (unsigned long)(off + done),
+                         (unsigned long)chunk,
+                         (unsigned long)done,
+                         (unsigned long)frame_bytes,
+                         (long)ret);
+        goto yuvtest_exit;
+      }
+
+      ret = BSP_XSPI_RAM_Read(Instance, &rd[done], off + done, chunk);
+      if (ret != BSP_ERROR_NONE)
+      {
+        XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] R fail off=0x%08lX len=%lu done=%lu/%lu ret=%ld",
+                         (unsigned long)(off + done),
+                         (unsigned long)chunk,
+                         (unsigned long)done,
+                         (unsigned long)frame_bytes,
+                         (long)ret);
+        goto yuvtest_exit;
+      }
+
+      for (j = 0U; j < chunk; j++)
+      {
+        if (rd[done + j] != wr[done + j])
         {
-          xbad_i = i;
-          xbad_exp = xchk_wr[i];
-          xbad_got = xchk_rd[i];
-          break;
+          mismatch++;
+          if (mismatch == 1U)
+          {
+            first_bad = done + j;
+            exp_bad = wr[done + j];
+            got_bad = rd[done + j];
+          }
         }
       }
-      XSPI_RAM_W958_HexHead(xchk_wr, xchk_len, xw_hex, (uint32_t)sizeof(xw_hex));
-      XSPI_RAM_W958_HexHead(xchk_rd, xchk_len, xr_hex, (uint32_t)sizeof(xr_hex));
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] A mismatch i=%lu exp=%02X got=%02X WR=%s RD=%s",
-                       (unsigned long)xbad_i,
-                       (unsigned int)xbad_exp,
-                       (unsigned int)xbad_got,
-                       xw_hex,
-                       xr_hex);
-      ret = BSP_ERROR_PERIPH_FAILURE;
-      goto yuvtest_exit;
-    }
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] A pass");
 
-    for (i = 0U; i < xchk_len; i++)
-    {
-      xchk_wr[i] = (uint8_t)(0x3CU + (i * 7U));
-      xchk_rd[i] = 0U;
-    }
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] B begin: MMP->INDIRECT len=%lu", (unsigned long)xchk_len);
-
-    XSPI_RAM_W958_MmpWrite((volatile uint8_t *)mmp_ptr, xchk_wr, xchk_len);
-    XSPI_RAM_W958_DCacheCleanRange((const void *)(uintptr_t)mmp_ptr, xchk_len);
-    __DSB();
-    __ISB();
-
-    xret = BSP_XSPI_RAM_DisableMemoryMappedMode(Instance);
-    if (xret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B disable MMP failed ret=%ld", (long)xret);
-      ret = xret;
-      goto yuvtest_exit;
-    }
-
-    xret = BSP_XSPI_RAM_Read(Instance, xchk_rd, off, xchk_len);
-    if (xret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B indirect read failed ret=%ld", (long)xret);
-      ret = xret;
-      goto yuvtest_exit;
-    }
-
-    xret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
-    if (xret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B re-enable MMP failed ret=%ld", (long)xret);
-      ret = xret;
-      goto yuvtest_exit;
-    }
-
-    if (memcmp(xchk_wr, xchk_rd, xchk_len) != 0)
-    {
-      for (i = 0U; i < xchk_len; i++)
+      if (mismatch != 0U)
       {
-        if (xchk_wr[i] != xchk_rd[i])
-        {
-          xbad_i = i;
-          xbad_exp = xchk_wr[i];
-          xbad_got = xchk_rd[i];
-          break;
-        }
+        XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] chunk mismatch off=0x%08lX len=%lu first_i=%lu exp=%02X got=%02X",
+                         (unsigned long)(off + done),
+                         (unsigned long)chunk,
+                         (unsigned long)first_bad,
+                         (unsigned int)exp_bad,
+                         (unsigned int)got_bad);
+        ret = BSP_ERROR_PERIPH_FAILURE;
+        goto yuvtest_exit;
       }
-      XSPI_RAM_W958_HexHead(xchk_wr, xchk_len, xw_hex, (uint32_t)sizeof(xw_hex));
-      XSPI_RAM_W958_HexHead(xchk_rd, xchk_len, xr_hex, (uint32_t)sizeof(xr_hex));
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK][ERR] B mismatch i=%lu exp=%02X got=%02X WR=%s RD=%s",
-                       (unsigned long)xbad_i,
-                       (unsigned int)xbad_exp,
-                       (unsigned int)xbad_got,
-                       xw_hex,
-                       xr_hex);
-      ret = BSP_ERROR_PERIPH_FAILURE;
-      goto yuvtest_exit;
-    }
-    XSPI_RAM_LOG_ERR("[W958][YUVTEST][XCHK] B pass");
-#endif /* (BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE == 1U) */
 
-    XSPI_RAM_W958_MmpWrite((volatile uint8_t *)mmp_ptr, wr, frame_bytes);
-    XSPI_RAM_W958_DCacheCleanRange((const void *)(uintptr_t)mmp_ptr, frame_bytes);
-    __DSB();
-    __ISB();
-    XSPI_RAM_W958_DCacheInvalidateRange((const void *)(uintptr_t)mmp_ptr, frame_bytes);
-    XSPI_RAM_W958_MmpRead((const volatile uint8_t *)mmp_ptr, rd, frame_bytes);
-  }
-  else
-  {
-    ret = BSP_XSPI_RAM_Write(Instance, wr, off, frame_bytes);
-    if (ret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] write fail off=0x%08lX bytes=%lu ret=%ld",
-                       (unsigned long)off, (unsigned long)frame_bytes, (long)ret);
-      goto yuvtest_exit;
-    }
-
-    ret = BSP_XSPI_RAM_Read(Instance, rd, off, frame_bytes);
-    if (ret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] read fail off=0x%08lX bytes=%lu ret=%ld",
-                       (unsigned long)off, (unsigned long)frame_bytes, (long)ret);
-      goto yuvtest_exit;
-    }
-  }
-
-  for (i = 0U; i < frame_bytes; i++)
-  {
-    if (rd[i] != wr[i])
-    {
-      mismatch++;
-      if (mismatch == 1U)
-      {
-        first_bad = i;
-        exp_bad = wr[i];
-        got_bad = rd[i];
-      }
+      done += chunk;
     }
   }
 
@@ -3187,24 +3081,7 @@ int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance)
   ret = BSP_ERROR_NONE;
 
 yuvtest_exit:
-  if ((run_mmp_path != 0U) && (XSPI_Ram_Ctx[Instance].IsInitialized != XSPI_ACCESS_MMP))
-  {
-    mmp_ret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
-    if (mmp_ret != BSP_ERROR_NONE)
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST][ERR] restore MMP after xchk failed ret=%ld", (long)mmp_ret);
-      if (ret == BSP_ERROR_NONE)
-      {
-        ret = mmp_ret;
-      }
-    }
-    else
-    {
-      XSPI_RAM_LOG_ERR("[W958][YUVTEST] restored to MMP");
-    }
-  }
-
-  if ((mmp_was_enabled != 0U) && (run_mmp_path == 0U))
+  if (mmp_was_enabled != 0U)
   {
     mmp_ret = BSP_XSPI_RAM_EnableMemoryMappedMode(Instance);
     if (mmp_ret != BSP_ERROR_NONE)

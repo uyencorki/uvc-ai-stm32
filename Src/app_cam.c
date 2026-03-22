@@ -309,9 +309,14 @@ static void DCMIPP_PipeInitDisplay(int sensor_width, int sensor_height)
   DCMIPP_HandleTypeDef *hdcmipp;
   DCMIPP_PipeConfTypeDef pipe_conf = { 0 };
   DCMIPP_CropConfTypeDef crop_conf = { 0 };
+  DCMIPP_DownsizeTypeDef down_conf = { 0 };
+  CMW_Manual_roi_area_t roi = { 0 };
   uint32_t out_width;
   uint32_t out_height;
   uint32_t pitch;
+  uint32_t crop_width;
+  uint32_t crop_height;
+  uint32_t downsize_enabled = 0U;
   int ret;
 
   assert(VENC_WIDTH >= VENC_HEIGHT);
@@ -334,17 +339,43 @@ static void DCMIPP_PipeInitDisplay(int sensor_width, int sensor_height)
   ret = HAL_DCMIPP_PIPE_DisableGammaConversion(hdcmipp, DCMIPP_PIPE1);
   assert(ret == HAL_OK);
 
-  crop_conf.VSize = (sensor_height > (int)out_height) ? out_height : (uint32_t)sensor_height;
-  crop_conf.HSize = (sensor_width > (int)out_width) ? out_width : (uint32_t)sensor_width;
-  crop_conf.VStart = ((uint32_t)sensor_height - crop_conf.VSize) / 2U;
-  crop_conf.HStart = ((uint32_t)sensor_width - crop_conf.HSize) / 2U;
+  /* Keep full FoV then downsize to requested output when needed. */
+  CAM_InitCropConfig(&roi, sensor_width, sensor_height);
+  crop_width = roi.width;
+  crop_height = roi.height;
+
+  crop_conf.HSize = crop_width;
+  crop_conf.VSize = crop_height;
+  crop_conf.HStart = roi.offset_x;
+  crop_conf.VStart = roi.offset_y;
 
   ret = HAL_DCMIPP_PIPE_SetCropConfig(hdcmipp, DCMIPP_PIPE1, &crop_conf);
   assert(ret == HAL_OK);
   ret = HAL_DCMIPP_PIPE_EnableCrop(hdcmipp, DCMIPP_PIPE1);
   assert(ret == HAL_OK);
 
-  printf("[CAM] pipe1 cfg out=%lux%lu fmt=%lu bpp=%lu pitch=%lu crop=(%lu,%lu %lux%lu)\r\n",
+  if ((crop_width > out_width) || (crop_height > out_height))
+  {
+    down_conf.HRatio = (uint32_t)(8192.0f * ((float)crop_width / (float)out_width));
+    down_conf.VRatio = (uint32_t)(8192.0f * ((float)crop_height / (float)out_height));
+    down_conf.HDivFactor = ((1024U * 8192U) - 1U) / down_conf.HRatio;
+    down_conf.VDivFactor = ((1024U * 8192U) - 1U) / down_conf.VRatio;
+    down_conf.HSize = out_width;
+    down_conf.VSize = out_height;
+
+    ret = HAL_DCMIPP_PIPE_SetDownsizeConfig(hdcmipp, DCMIPP_PIPE1, &down_conf);
+    assert(ret == HAL_OK);
+    ret = HAL_DCMIPP_PIPE_EnableDownsize(hdcmipp, DCMIPP_PIPE1);
+    assert(ret == HAL_OK);
+    downsize_enabled = 1U;
+  }
+  else
+  {
+    ret = HAL_DCMIPP_PIPE_DisableDownsize(hdcmipp, DCMIPP_PIPE1);
+    assert(ret == HAL_OK);
+  }
+
+  printf("[CAM] pipe1 cfg out=%lux%lu fmt=%lu bpp=%lu pitch=%lu crop=(%lu,%lu %lux%lu) downsize=%lu\r\n",
          (unsigned long)out_width,
          (unsigned long)out_height,
          (unsigned long)pipe_conf.PixelPackerFormat,
@@ -353,7 +384,8 @@ static void DCMIPP_PipeInitDisplay(int sensor_width, int sensor_height)
          (unsigned long)crop_conf.HStart,
          (unsigned long)crop_conf.VStart,
          (unsigned long)crop_conf.HSize,
-         (unsigned long)crop_conf.VSize);
+         (unsigned long)crop_conf.VSize,
+         (unsigned long)downsize_enabled);
   printf("[CAM] pipe1 ISP bypass: YUV conversion OFF, gamma OFF\r\n");
 }
 
@@ -438,6 +470,7 @@ static void DCMIPP_ReduceSpurious(DCMIPP_HandleTypeDef *hdcmipp)
 void CAM_Init(void)
 {
   CMW_CameraInit_t cam_conf;
+  CMW_Advanced_Config_t cam_adv_conf = { 0 };
   CMW_Sensor_Name_t sensor;
   int ret;
 
@@ -459,7 +492,14 @@ void CAM_Init(void)
   cam_conf.height = sensor_height;
   cam_conf.fps = CAMERA_FPS;
   cam_conf.mirror_flip = sensor_mirror_flip;
-  ret = CMW_CAMERA_Init(&cam_conf, NULL);
+  cam_adv_conf.selected_sensor = sensor;
+  if (sensor == CMW_DVP_Sensor)
+  {
+    /* PX9210K already outputs YUV422_8, force CMW path to stay in ISP-bypass mode. */
+    cam_adv_conf.config_sensor.dvp_config.pixel_format = CMW_PIXEL_FORMAT_YUV422_8;
+    printf("[CAM] force sensor fmt=YUV422_8 (bypass STM32 ISP)\r\n");
+  }
+  ret = CMW_CAMERA_Init(&cam_conf, &cam_adv_conf);
   assert(ret == CMW_ERROR_NONE);
   sensor_width = cam_conf.width;
   sensor_height = cam_conf.height;

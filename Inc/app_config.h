@@ -27,9 +27,9 @@
 #define SENSOR_DVP_HEIGHT 1080
 #define SENSOR_DVP_FLIP CMW_MIRRORFLIP_NONE
 
-/* Use native PX9210K output for capture/encode path. */
-#define VENC_DVP_WIDTH 1920
-#define VENC_DVP_HEIGHT 1080
+/* Pipe1 output target for capture/encode path (use DCMIPP downsize from 1920x1080). */
+#define VENC_DVP_WIDTH 960
+#define VENC_DVP_HEIGHT 540
 
 /* Delay display by CAPTURE_DELAY frame number */
 #define CAPTURE_DELAY 0

@@ -144,17 +144,19 @@ __WEAK HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *const hdma)
 #define APP_ENC_FORCE_SEND_AFTER_ENCODE 1
 #define APP_UVC_TEST_FORCE_DEDICATED_SRC 1
 #define APP_UVC_TEST_SMALL_FRAME_ENABLE 1
-#define APP_UVC_TEST_SMALL_WIDTH 320
-#define APP_UVC_TEST_SMALL_HEIGHT 240
-#define APP_UVC_TEST_STREAM_FPS 1
-#define APP_UVC_TEST_SRC_IN_AXI 0
-#define APP_UVC_TEST_FIXED_PSRAM_SRC_ENABLE 1
+#define APP_UVC_TEST_SMALL_WIDTH 960
+#define APP_UVC_TEST_SMALL_HEIGHT 540
+#define APP_UVC_TEST_STREAM_FPS 30
+#define APP_UVC_TEST_SRC_IN_AXI 1
+#define APP_UVC_TEST_FIXED_PSRAM_SRC_ENABLE 0
+/* 1: keep test pipeline but use live DCMIPP pipe1 frame as source into g_uvc_test_src_buffer */
+#define APP_UVC_TEST_USE_DCMIPP_SOURCE 1
 /* Use a dedicated PSRAM MMP window (known-good in probe) for test YUV source buffer. */
 #define APP_UVC_TEST_FIXED_PSRAM_SRC_ADDR 0x90100000UL
 #define APP_UVC_SEND_DIRECT_ENC_BUF 1
 #define APP_UVC_TEST_FREEZE_AFTER_FIRST_ENCODE 0
 #define APP_UVC_SRC_LOG_PERIOD_MS 1000U
-#define APP_PSRAM_SRC_GUARD_ENABLE 1
+#define APP_PSRAM_SRC_GUARD_ENABLE 0
 #define APP_PSRAM_SRC_GUARD_PERIOD_MS 1000U
 /*
  * PSRAM window debug:
@@ -167,7 +169,11 @@ __WEAK HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *const hdma)
 #define APP_ENC_OUT_SENTINEL_DEBUG 0
 #define APP_UVC_TEST_SRC_FMT_YUYV 1
 #define APP_UVC_TEST_SRC_FMT_UYVY 2
+#define APP_UVC_TEST_SRC_FMT_YVYU 3
+#define APP_UVC_TEST_SRC_FMT_VYUY 4
 #define APP_UVC_TEST_SRC_FMT APP_UVC_TEST_SRC_FMT_YUYV
+/* 0=auto from CAPTURE_FORMAT, else force one of APP_UVC_TEST_SRC_FMT_* for live DCMIPP debug. */
+#define APP_UVC_LIVE_SRC_FMT_OVERRIDE APP_UVC_TEST_SRC_FMT_YVYU
 /* 0: normal path (YUV -> JPEG encoder -> UVC), 1: bypass encoder and stream raw YUY2 over UVC. */
 #define APP_UVC_TEST_VIEW_RAW_YUY2 0
 /* Software JPEG encoder quality index [0..10], 10 = highest quality in Quant* tables. */
@@ -197,6 +203,21 @@ __WEAK HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *const hdma)
 #error "Unsupported APP_UVC_TEST_SRC_FMT"
 #endif
 
+/* Runtime source format used by software JPEG path (live DCMIPP can override compile-time test fmt). */
+static uint32_t g_uvc_runtime_src_fmt = APP_UVC_TEST_SRC_FMT;
+
+static const char *app_uvc_src_fmt_name(uint32_t fmt)
+{
+  switch (fmt)
+  {
+    case APP_UVC_TEST_SRC_FMT_UYVY: return "UYVY";
+    case APP_UVC_TEST_SRC_FMT_YVYU: return "YVYU";
+    case APP_UVC_TEST_SRC_FMT_VYUY: return "VYUY";
+    case APP_UVC_TEST_SRC_FMT_YUYV:
+    default: return "YUYV";
+  }
+}
+
 /* Master switch for any UVC-prefixed log print. */
 #define APP_UVC_LOG_ENABLE 0
 /* Keep callback-level stream logs even when APP_UVC_LOG_ENABLE is off. */
@@ -220,6 +241,8 @@ __WEAK HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *const hdma)
 #define APP_UVC_PRESEND_JPEG_CHECK 0
 #define APP_UVC_PRESEND_BLOCK_ON_INVALID 1
 #define APP_UVC_PRESEND_LOG_PERIOD_MS 5000U
+#define APP_UVC_PERF_LOG_ENABLE 1
+#define APP_UVC_PERF_LOG_PERIOD_MS 1000U
 #if APP_UVC_TEST_PATTERN_MODE
 #define APP_UVC_START_WARMUP_FRAMES 0U
 #define APP_UVC_START_THROTTLE_ENABLE 0
@@ -257,7 +280,7 @@ static int app_testpat_pull_dedicated_psram_to_axi(int len);
 /* AXI staging buffer used by custom encoder; source of truth remains in PSRAM. */
 static uint8_t g_uvc_test_src_axi_staging[APP_UVC_ENC_FRAME_BYTES] ALIGN_32;
 #endif
-#if APP_PSRAM_SRC_GUARD_ENABLE && APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_PREBUILT_YUYV_MODE && APP_UVC_TEST_FORCE_DEDICATED_SRC && !APP_UVC_TEST_SRC_IN_AXI
+#if APP_PSRAM_SRC_GUARD_ENABLE && APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_PREBUILT_YUYV_MODE && APP_UVC_TEST_FORCE_DEDICATED_SRC
 static int app_psram_src_compare_against_header(const uint8_t *src, int len,
                                                 uint32_t *mismatch_off, uint8_t *got, uint8_t *exp);
 #endif
@@ -553,6 +576,15 @@ static uint32_t g_uvc_path_last_log_ms;
 static uint32_t g_uvc_last_pipe1_seq;
 static uint32_t g_uvc_last_enc_ms;
 static uint32_t g_uvc_last_send_ms;
+static uint32_t g_uvc_perf_last_ms;
+static uint32_t g_uvc_perf_last_pipe1_completed_seq;
+static uint32_t g_uvc_perf_last_bringup_submit_count;
+static uint32_t g_uvc_perf_last_enc_ok_count;
+static uint32_t g_uvc_perf_last_enc_fail_count;
+static uint32_t g_uvc_perf_last_drop_busy_count;
+static uint32_t g_uvc_perf_last_show_ok_count;
+static uint32_t g_uvc_perf_last_show_fail_count;
+static uint32_t g_uvc_perf_last_frame_release_count;
 static int uvc_is_active;
 static volatile int buffer_flying;
 
@@ -1054,6 +1086,60 @@ static int app_uvc_presend_check_jpeg(const uint8_t *buf, int len)
   (void)buf;
   (void)len;
   return 0;
+#endif
+}
+
+static void app_log_uvc_perf_1s(void)
+{
+#if !APP_UVC_PERF_LOG_ENABLE
+  return;
+#else
+  uint32_t now_ms = HAL_GetTick();
+  uint32_t d_cap;
+  uint32_t d_submit;
+  uint32_t d_enc_ok;
+  uint32_t d_enc_fail;
+  uint32_t d_drop_busy;
+  uint32_t d_show_ok;
+  uint32_t d_show_fail;
+  uint32_t d_release;
+
+  if ((now_ms - g_uvc_perf_last_ms) < APP_UVC_PERF_LOG_PERIOD_MS)
+  {
+    return;
+  }
+
+  d_cap = g_pipe1_completed_seq - g_uvc_perf_last_pipe1_completed_seq;
+  d_submit = g_uvc_bringup_submit_count - g_uvc_perf_last_bringup_submit_count;
+  d_enc_ok = g_uvc_enc_ok_count - g_uvc_perf_last_enc_ok_count;
+  d_enc_fail = g_uvc_enc_fail_count - g_uvc_perf_last_enc_fail_count;
+  d_drop_busy = g_uvc_drop_busy_count - g_uvc_perf_last_drop_busy_count;
+  d_show_ok = g_uvc_show_ok_count - g_uvc_perf_last_show_ok_count;
+  d_show_fail = g_uvc_show_fail_count - g_uvc_perf_last_show_fail_count;
+  d_release = g_uvc_frame_release_count - g_uvc_perf_last_frame_release_count;
+
+  printf("==== PERF 1s: cap=%lu submit=%lu enc_ok=%lu enc_fail=%lu drop_busy=%lu show_ok=%lu show_fail=%lu release=%lu flying=%d enc_ms=%lu send_ms=%lu ====\r\n",
+         (unsigned long)d_cap,
+         (unsigned long)d_submit,
+         (unsigned long)d_enc_ok,
+         (unsigned long)d_enc_fail,
+         (unsigned long)d_drop_busy,
+         (unsigned long)d_show_ok,
+         (unsigned long)d_show_fail,
+         (unsigned long)d_release,
+         buffer_flying,
+         (unsigned long)g_uvc_last_enc_ms,
+         (unsigned long)g_uvc_last_send_ms);
+
+  g_uvc_perf_last_ms = now_ms;
+  g_uvc_perf_last_pipe1_completed_seq = g_pipe1_completed_seq;
+  g_uvc_perf_last_bringup_submit_count = g_uvc_bringup_submit_count;
+  g_uvc_perf_last_enc_ok_count = g_uvc_enc_ok_count;
+  g_uvc_perf_last_enc_fail_count = g_uvc_enc_fail_count;
+  g_uvc_perf_last_drop_busy_count = g_uvc_drop_busy_count;
+  g_uvc_perf_last_show_ok_count = g_uvc_show_ok_count;
+  g_uvc_perf_last_show_fail_count = g_uvc_show_fail_count;
+  g_uvc_perf_last_frame_release_count = g_uvc_frame_release_count;
 #endif
 }
 
@@ -2282,7 +2368,7 @@ static int app_testpat_reload_dedicated_src_from_header(void)
 }
 #endif
 
-#if APP_PSRAM_SRC_GUARD_ENABLE && APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_PREBUILT_YUYV_MODE && APP_UVC_TEST_FORCE_DEDICATED_SRC && !APP_UVC_TEST_SRC_IN_AXI
+#if APP_PSRAM_SRC_GUARD_ENABLE && APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_PREBUILT_YUYV_MODE && APP_UVC_TEST_FORCE_DEDICATED_SRC
 static int app_psram_src_compare_against_header(const uint8_t *src,
                                                 int len,
                                                 uint32_t *mismatch_off,
@@ -2370,7 +2456,68 @@ static int app_psram_src_compare_against_header(const uint8_t *src,
     return 0;
   }
 
-  return -1;
+  /*
+   * Generic path for non-prebuilt sizes (e.g. 960x540):
+   * expected frame is generated by nearest-neighbor upscale from 320x240 source
+   * in app_testpat_build_frame_from_prebuilt_yuyv().
+   */
+  {
+    const uint32_t src_w = 320U;
+    const uint32_t src_h = 240U;
+    const uint32_t src_row_len = src_w * 2U;
+    const uint32_t dst_w = (uint32_t)APP_UVC_ENC_WIDTH;
+    const uint32_t dst_h = (uint32_t)APP_UVC_ENC_HEIGHT;
+    const uint32_t dst_row_len = dst_w * 2U;
+    uint32_t y;
+
+    if ((dst_w == 0U) || (dst_h == 0U) || ((dst_w & 1U) != 0U))
+    {
+      return -1;
+    }
+    if (g_app_uvc_test_yuyv_320x240_len != (src_w * src_h * 2U))
+    {
+      return -1;
+    }
+
+    for (y = 0U; y < dst_h; y++)
+    {
+      uint32_t sy = (y * src_h) / dst_h;
+      const uint8_t *src_row = g_app_uvc_test_yuyv_320x240 + (sy * src_row_len);
+      const uint8_t *dst_row = src + (y * dst_row_len);
+      uint32_t x;
+
+      for (x = 0U; x < dst_w; x += 2U)
+      {
+        uint32_t sx = ((x * src_w) / dst_w) & ~1U;
+        const uint8_t *exp4 = src_row + (sx * 2U);
+        const uint8_t *got4 = dst_row + (x * 2U);
+        uint32_t b;
+
+        for (b = 0U; b < 4U; b++)
+        {
+          if (got4[b] != exp4[b])
+          {
+            uint32_t off = (y * dst_row_len) + (x * 2U) + b;
+            if (mismatch_off != NULL)
+            {
+              *mismatch_off = off;
+            }
+            if (got != NULL)
+            {
+              *got = got4[b];
+            }
+            if (exp != NULL)
+            {
+              *exp = exp4[b];
+            }
+            return -1;
+          }
+        }
+      }
+    }
+  }
+
+  return 0;
 }
 
 static void app_psram_src_guard_verify_1s(uint8_t *src_buf, int len)
@@ -2918,15 +3065,30 @@ static int app_swjpg_get_yuv(const uint8_t *src, int width, int x, int y, uint8_
   row = src + ((size_t)y * (size_t)width * 2U);
   p = row + ((size_t)(x >> 1) * 4U);
 
-#if (APP_UVC_TEST_SRC_FMT == APP_UVC_TEST_SRC_FMT_YUYV)
-  *yy = (x & 1) ? p[2] : p[0];
-  *uu = p[1];
-  *vv = p[3];
-#else
-  *yy = (x & 1) ? p[3] : p[1];
-  *uu = p[0];
-  *vv = p[2];
-#endif
+  if (g_uvc_runtime_src_fmt == APP_UVC_TEST_SRC_FMT_UYVY)
+  {
+    *yy = (x & 1) ? p[3] : p[1];
+    *uu = p[0];
+    *vv = p[2];
+  }
+  else if (g_uvc_runtime_src_fmt == APP_UVC_TEST_SRC_FMT_YVYU)
+  {
+    *yy = (x & 1) ? p[2] : p[0];
+    *uu = p[3];
+    *vv = p[1];
+  }
+  else if (g_uvc_runtime_src_fmt == APP_UVC_TEST_SRC_FMT_VYUY)
+  {
+    *yy = (x & 1) ? p[3] : p[1];
+    *uu = p[2];
+    *vv = p[0];
+  }
+  else
+  {
+    *yy = (x & 1) ? p[2] : p[0];
+    *uu = p[1];
+    *vv = p[3];
+  }
   return 0;
 }
 
@@ -2938,6 +3100,8 @@ static int app_swjpg_encode_yuv422_to_jpeg(const uint8_t *yuyv,
                                            int quality_level)
 {
   app_swjpg_bw_t bw;
+  int mcu_w;
+  int mcu_h;
   int mcu_x;
   int mcu_y;
   int16_t dc_y = 0;
@@ -2961,9 +3125,9 @@ static int app_swjpg_encode_yuv422_to_jpeg(const uint8_t *yuyv,
   {
     return -1;
   }
-  if (((width & 15) != 0) || ((height & 7) != 0))
+  if ((width <= 0) || (height <= 0) || ((width & 1) != 0))
   {
-    return -1; /* 4:2:2 MCU is 16x8 */
+    return -1; /* YUV422 requires even width */
   }
   if (quality_level < 0)
   {
@@ -2977,6 +3141,8 @@ static int app_swjpg_encode_yuv422_to_jpeg(const uint8_t *yuyv,
   app_swjpg_init_tables();
   qt_y = QuantLuminance[quality_level];
   qt_c = QuantChrominance[quality_level];
+  mcu_w = (width + 15) / 16;
+  mcu_h = (height + 7) / 8;
 
   memset(&bw, 0, sizeof(bw));
   bw.buf = out;
@@ -3051,9 +3217,9 @@ static int app_swjpg_encode_yuv422_to_jpeg(const uint8_t *yuyv,
   app_swjpg_bw_put_byte(&bw, 63U, 0);
   app_swjpg_bw_put_byte(&bw, 0U, 0);
 
-  for (mcu_y = 0; mcu_y < (height / 8); mcu_y++)
+  for (mcu_y = 0; mcu_y < mcu_h; mcu_y++)
   {
-    for (mcu_x = 0; mcu_x < (width / 16); mcu_x++)
+    for (mcu_x = 0; mcu_x < mcu_w; mcu_x++)
     {
       x0 = mcu_x * 16;
       y0 = mcu_y * 8;
@@ -3062,11 +3228,33 @@ static int app_swjpg_encode_yuv422_to_jpeg(const uint8_t *yuyv,
       {
         for (xx = 0; xx < 8; xx++)
         {
-          (void)app_swjpg_get_yuv(yuyv, width, x0 + xx, y0 + yy, &sy, &su, &sv);
+          int sx = x0 + xx;
+          int syy = y0 + yy;
+          if (sx >= width)
+          {
+            sx = width - 1;
+          }
+          if (syy >= height)
+          {
+            syy = height - 1;
+          }
+          (void)app_swjpg_get_yuv(yuyv, width, sx, syy, &sy, &su, &sv);
           yblk0[yy * 8 + xx] = sy;
-          (void)app_swjpg_get_yuv(yuyv, width, x0 + 8 + xx, y0 + yy, &sy, &su, &sv);
+
+          sx = x0 + 8 + xx;
+          if (sx >= width)
+          {
+            sx = width - 1;
+          }
+          (void)app_swjpg_get_yuv(yuyv, width, sx, syy, &sy, &su, &sv);
           yblk1[yy * 8 + xx] = sy;
-          (void)app_swjpg_get_yuv(yuyv, width, x0 + (xx * 2), y0 + yy, &sy, &su, &sv);
+
+          sx = x0 + (xx * 2);
+          if (sx >= width)
+          {
+            sx = width - 1;
+          }
+          (void)app_swjpg_get_yuv(yuyv, width, sx, syy, &sy, &su, &sv);
           cbblk[yy * 8 + xx] = su;
           crblk[yy * 8 + xx] = sv;
         }
@@ -3287,7 +3475,7 @@ static uint8_t capture_buffer[CAPTURE_BUFFER_NB][VENC_MAX_WIDTH * VENC_MAX_HEIGH
 static int capture_buffer_disp_idx = 1;
 static int capture_buffer_capt_idx = 0;
 #if APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_FORCE_DEDICATED_SRC && !APP_UVC_TEST_STATIC_JPEG_MODE
-#if APP_UVC_TEST_SRC_IN_AXI && APP_UVC_TEST_SMALL_FRAME_ENABLE
+#if APP_UVC_TEST_SRC_IN_AXI && APP_UVC_TEST_SMALL_FRAME_ENABLE && (APP_UVC_TEST_SMALL_WIDTH <= 640) && (APP_UVC_TEST_SMALL_HEIGHT <= 480)
 /* Cache-coherency debug path: make synthetic YUV source uncached. */
 static uint8_t g_uvc_test_src_buffer[APP_UVC_ENC_FRAME_BYTES] ALIGN_32 UNCACHED;
 #elif APP_UVC_TEST_SRC_IN_AXI
@@ -3354,7 +3542,6 @@ static int force_intra;
 #if APP_UVC_TEST_PATTERN_MODE
 static uint8_t g_uvc_test_pattern_ready;
 static uint32_t g_uvc_test_pattern_seq;
-static uint32_t g_uvc_test_pattern_last_tick_ms;
 #if !APP_UVC_TEST_STATIC_JPEG_MODE
 static uint8_t g_uvc_test_encoded_ready;
 static int g_uvc_test_encoded_len;
@@ -3530,6 +3717,35 @@ static void bqueue_put_ready(bqueue_t *bq)
 
 static int app_main_pipe_frame_event(void)
 {
+#if APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_USE_DCMIPP_SOURCE
+  uint8_t *dedicated_src = app_get_test_src_cpu_buffer();
+  int ret;
+
+  if (dedicated_src == NULL)
+  {
+    return HAL_ERROR;
+  }
+
+  /* Direct path: DCMIPP PIPE1 always writes to dedicated source buffer. */
+  ret = HAL_DCMIPP_PIPE_SetMemoryAddress(CMW_CAMERA_GetDCMIPPHandle(), DCMIPP_PIPE1,
+                                         DCMIPP_MEMORY_ADDRESS_0, (uint32_t)dedicated_src);
+  if (ret != HAL_OK)
+  {
+    g_pipe1_rearm_fail_count++;
+    g_pipe1_rearm_fail_last_ret = ret;
+    g_pipe1_rearm_fail_last_state = HAL_DCMIPP_PIPE_GetState(CMW_CAMERA_GetDCMIPPHandle(), DCMIPP_PIPE1);
+    g_pipe1_rearm_fail_last_disp_idx = 0;
+    g_pipe1_rearm_fail_last_capt_idx = 0;
+    g_pipe1_rearm_fail_last_next_idx = 0;
+    g_pipe1_rearm_fail_pending_log = 1;
+    return ret;
+  }
+
+  g_pipe1_rearm_ok_count++;
+  g_pipe1_last_completed_idx = 0;
+  g_pipe1_completed_seq++;
+  return HAL_OK;
+#else
   int completed_idx = capture_buffer_capt_idx;
   int next_disp_idx = (capture_buffer_disp_idx + 1) % CAPTURE_BUFFER_NB;
   int next_capt_idx = (capture_buffer_capt_idx + 1) % CAPTURE_BUFFER_NB;
@@ -3567,6 +3783,7 @@ static int app_main_pipe_frame_event(void)
   }
 
   return HAL_OK;
+#endif
 }
 
 static void app_ancillary_pipe_frame_event()
@@ -3925,21 +4142,6 @@ static void app_uvc_try_send_pipe1_bringup(void)
 
 #if APP_UVC_TEST_PATTERN_MODE
 #if APP_UVC_TEST_STATIC_JPEG_MODE
-  {
-    uint32_t now_ms = HAL_GetTick();
-    uint32_t period_ms = (APP_UVC_TEST_STREAM_FPS > 0) ? (1000U / (uint32_t)APP_UVC_TEST_STREAM_FPS) : 1000U;
-    if (period_ms == 0U)
-    {
-      period_ms = 1U;
-    }
-    if ((g_uvc_test_pattern_last_tick_ms != 0U) &&
-        ((now_ms - g_uvc_test_pattern_last_tick_ms) < period_ms))
-    {
-      return;
-    }
-    g_uvc_test_pattern_last_tick_ms = now_ms;
-  }
-
   seq = ++g_uvc_test_pattern_seq;
   idx = 0;
   src_buf = NULL;
@@ -3947,6 +4149,40 @@ static void app_uvc_try_send_pipe1_bringup(void)
 #else
 #if (CAPTURE_BPP != 2)
   return;
+#else
+#if APP_UVC_TEST_USE_DCMIPP_SOURCE
+  {
+    static uint32_t last_pipe1_seq_in_test = 0U;
+    uint8_t *dedicated_src;
+
+    seq = g_pipe1_completed_seq;
+    if ((seq == 0U) || (seq == last_pipe1_seq_in_test))
+    {
+      return;
+    }
+
+    idx = g_pipe1_last_completed_idx;
+    if ((idx < 0) || (idx >= CAPTURE_BUFFER_NB))
+    {
+      return;
+    }
+
+#if APP_UVC_TEST_FORCE_DEDICATED_SRC
+    dedicated_src = app_get_test_src_cpu_buffer();
+    if (dedicated_src == NULL)
+    {
+      return;
+    }
+    /* Direct path: DCMIPP already wrote frame into g_uvc_test_src_buffer. */
+    app_invalidate_dcache_for_cpu_read(dedicated_src, APP_UVC_ENC_FRAME_BYTES);
+    src_buf = dedicated_src;
+#else
+    src_buf = capture_buffer[idx];
+#endif
+
+    last_pipe1_seq_in_test = seq;
+    g_uvc_last_pipe1_seq = seq;
+  }
 #else
 #if !APP_UVC_TEST_FORCE_DEDICATED_SRC
   /* Legacy path only: refresh capture_buffer[0] from header. */
@@ -4011,21 +4247,6 @@ static void app_uvc_try_send_pipe1_bringup(void)
 #endif
   }
 
-  {
-    uint32_t now_ms = HAL_GetTick();
-    uint32_t period_ms = (APP_UVC_TEST_STREAM_FPS > 0) ? (1000U / (uint32_t)APP_UVC_TEST_STREAM_FPS) : 1000U;
-    if (period_ms == 0U)
-    {
-      period_ms = 1U;
-    }
-    if ((g_uvc_test_pattern_last_tick_ms != 0U) &&
-        ((now_ms - g_uvc_test_pattern_last_tick_ms) < period_ms))
-    {
-      return;
-    }
-    g_uvc_test_pattern_last_tick_ms = now_ms;
-  }
-
   seq = ++g_uvc_test_pattern_seq;
   idx = 0;
 #if APP_UVC_TEST_FORCE_DEDICATED_SRC
@@ -4045,6 +4266,7 @@ static void app_uvc_try_send_pipe1_bringup(void)
   src_buf = g_uvc_test_src_axi_staging;
 #endif
   g_uvc_last_pipe1_seq = seq;
+#endif /* APP_UVC_TEST_USE_DCMIPP_SOURCE */
 #endif
 #endif
 #else
@@ -4467,6 +4689,7 @@ static void isp_thread_fct(void *arg)
     app_log_cam_health_1s();
     app_log_dcmipp_error_poll_1s();
     app_log_uvc_health_1s();
+    app_log_uvc_perf_1s();
     app_dump_pipe1_frame_data_1s();
   }
 }
@@ -4496,7 +4719,6 @@ static void app_uvc_streaming_active(struct uvcl_callbacks *cbs, UVCL_StreamConf
   g_pipe_error_start_recover_count = 0U;
 #if APP_UVC_TEST_PATTERN_MODE
   g_uvc_test_pattern_seq = 0U;
-  g_uvc_test_pattern_last_tick_ms = 0U;
 #if !APP_UVC_TEST_STATIC_JPEG_MODE
   g_uvc_test_encoded_ready = 0U;
   g_uvc_test_encoded_len = 0;
@@ -4748,6 +4970,27 @@ void app_run()
   /*** Camera Init ************************************************************/  
   CAM_Init();
 
+  /* Decide runtime YUV byte order for software JPEG path. */
+#if APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_USE_DCMIPP_SOURCE
+#if (CAPTURE_FORMAT == DCMIPP_PIXEL_PACKER_FORMAT_YUV422_1_UYVY)
+  g_uvc_runtime_src_fmt = APP_UVC_TEST_SRC_FMT_UYVY;
+#else
+  g_uvc_runtime_src_fmt = APP_UVC_TEST_SRC_FMT_YUYV;
+#endif
+#if (APP_UVC_LIVE_SRC_FMT_OVERRIDE != 0)
+  g_uvc_runtime_src_fmt = APP_UVC_LIVE_SRC_FMT_OVERRIDE;
+  printf("==== UVC FIX: LIVE SRC_FMT OVERRIDE=%s ====\r\n",
+         app_uvc_src_fmt_name(g_uvc_runtime_src_fmt));
+#endif
+  printf("==== UVC FIX: LIVE DCMIPP SRC_FMT=%s (from CAPTURE_FORMAT) ====\r\n",
+         app_uvc_src_fmt_name(g_uvc_runtime_src_fmt));
+  printf("==== UVC FIX: DISABLE FORCE APP_UVC_TEST_SRC_FMT IN LIVE MODE ====\r\n");
+#else
+  g_uvc_runtime_src_fmt = APP_UVC_TEST_SRC_FMT;
+  printf("==== UVC FIX: PATTERN SRC_FMT=%s (from APP_UVC_TEST_SRC_FMT) ====\r\n",
+         app_uvc_src_fmt_name(g_uvc_runtime_src_fmt));
+#endif
+
   /* Encoder init */
 #if !(APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_CUSTOM_ENCODER_MODE && !APP_UVC_TEST_VIEW_RAW_YUY2)
   enc_conf.width = APP_UVC_ENC_WIDTH;
@@ -4765,6 +5008,22 @@ void app_run()
   enc_conf.input_type = ENC_INPUT_RGB888;
 #endif
 #if APP_UVC_TEST_PATTERN_MODE
+#if APP_UVC_TEST_USE_DCMIPP_SOURCE
+  switch (g_uvc_runtime_src_fmt)
+  {
+    case APP_UVC_TEST_SRC_FMT_UYVY:
+    case APP_UVC_TEST_SRC_FMT_VYUY:
+      enc_conf.input_type = ENC_INPUT_YUV422_UYVY;
+      break;
+    case APP_UVC_TEST_SRC_FMT_YVYU:
+    case APP_UVC_TEST_SRC_FMT_YUYV:
+    default:
+      enc_conf.input_type = ENC_INPUT_YUV422_YUYV;
+      break;
+  }
+  printf("==== UVC FIX: ENC INPUT FOLLOWS LIVE SRC_FMT=%s ====\r\n",
+         app_uvc_src_fmt_name(g_uvc_runtime_src_fmt));
+#else
 #if (APP_UVC_TEST_SRC_FMT == APP_UVC_TEST_SRC_FMT_YUYV)
   enc_conf.input_type = ENC_INPUT_YUV422_YUYV;
 #if APP_UVC_TEST_BOOT_LOG_ENABLE
@@ -4774,6 +5033,7 @@ void app_run()
   enc_conf.input_type = ENC_INPUT_YUV422_UYVY;
 #if APP_UVC_TEST_BOOT_LOG_ENABLE
   printf("[UVC][TEST] quick-color-test: force encoder input UYVY (match synthetic source)\r\n");
+#endif
 #endif
 #endif
 #endif
@@ -4848,6 +5108,20 @@ void app_run()
 
   /* Start LCD Display camera pipe stream */
 #if APP_UVC_TEST_PATTERN_MODE
+#if APP_UVC_TEST_USE_DCMIPP_SOURCE
+  {
+    uint8_t *dedicated_src = app_get_test_src_cpu_buffer();
+    if (dedicated_src == NULL)
+    {
+      dedicated_src = capture_buffer[0];
+    }
+    CAM_DisplayPipe_Start(dedicated_src, CMW_MODE_CONTINUOUS);
+  }
+#if APP_UVC_TEST_BOOT_LOG_ENABLE
+  printf("[CAM] test-pattern mode + DCMIPP source: pipe1 camera start enabled\r\n");
+  printf("[UVC][TEST] source=live DCMIPP pipe1 -> g_uvc_test_src_buffer (direct)\r\n");
+#endif
+#else
 #if APP_UVC_TEST_BOOT_LOG_ENABLE
   printf("[CAM] test-pattern mode enabled: pipe1 camera start skipped\r\n");
 #if APP_UVC_TEST_STATIC_JPEG_MODE
@@ -4895,6 +5169,7 @@ void app_run()
 #endif
 #endif
 #endif
+#endif
 #else
   CAM_DisplayPipe_Start(capture_buffer[0], CMW_MODE_CONTINUOUS);
 #endif
@@ -4924,7 +5199,7 @@ void app_run()
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
 {
-#if APP_UVC_TEST_PATTERN_MODE
+#if APP_UVC_TEST_PATTERN_MODE && !APP_UVC_TEST_USE_DCMIPP_SOURCE
   (void)pipe;
   return HAL_OK;
 #else
