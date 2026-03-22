@@ -124,7 +124,7 @@ int main(void)
   CONSOLE_Config();
 
   printf ("========================================== \r\n");
-  printf ("------ run app ---------  \r\n");
+  printf ("------ run app --------- [%s %s]\r\n", __DATE__, __TIME__);
 
   /* Power on ICACHE */
   MEMSYSCTL->MSCR |= MEMSYSCTL_MSCR_ICACTIVE_Msk;

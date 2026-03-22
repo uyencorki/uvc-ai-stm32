@@ -164,7 +164,7 @@ extern "C" {
 #endif /* BSP_XSPI_RAM_W958_POST_INIT_PRESCALER */
 
 #ifndef BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES
-#define BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES 4U
+#define BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES 8U
 #endif /* BSP_XSPI_RAM_W958_RW_RECOVERY_CYCLES */
 
 #ifndef BSP_XSPI_RAM_W958_ACCESS_CYCLES
@@ -178,6 +178,38 @@ extern "C" {
  */
 #define BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES    32U
 #endif /* BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES */
+
+#ifndef BSP_XSPI_RAM_W958_MEM_WAIT_BUSY_ENABLE
+/*
+ * Transaction debug guard:
+ * 1: wait BUSY=0 before/after each ReadMem/WriteMem operation.
+ * 0: disable BUSY wait guard.
+ */
+#define BSP_XSPI_RAM_W958_MEM_WAIT_BUSY_ENABLE 1U
+#endif /* BSP_XSPI_RAM_W958_MEM_WAIT_BUSY_ENABLE */
+
+#ifndef BSP_XSPI_RAM_W958_MEM_WAIT_BUSY_TIMEOUT_MS
+/*
+ * Timeout for BUSY-clear wait guard.
+ */
+#define BSP_XSPI_RAM_W958_MEM_WAIT_BUSY_TIMEOUT_MS 20U
+#endif /* BSP_XSPI_RAM_W958_MEM_WAIT_BUSY_TIMEOUT_MS */
+
+#ifndef BSP_XSPI_RAM_W958_MEM_SEQ_LOG_ENABLE
+/*
+ * 1: print per-op sequence logs around ReadMem/WriteMem.
+ * 0: disable sequence logs.
+ */
+#define BSP_XSPI_RAM_W958_MEM_SEQ_LOG_ENABLE 0U
+#endif /* BSP_XSPI_RAM_W958_MEM_SEQ_LOG_ENABLE */
+
+#ifndef BSP_XSPI_RAM_W958_MEM_RANGE_LOG_ENABLE
+/*
+ * 1: print range-level transfer summary logs for BSP_XSPI_RAM_Read/Write.
+ * 0: disable range summary logs.
+ */
+#define BSP_XSPI_RAM_W958_MEM_RANGE_LOG_ENABLE 1U
+#endif /* BSP_XSPI_RAM_W958_MEM_RANGE_LOG_ENABLE */
 
 #ifndef BSP_XSPI_RAM_W958_ENABLE_RECOVER
 /*
@@ -209,6 +241,30 @@ extern "C" {
 #define BSP_XSPI_RAM_W958_ADDR_TEST_BYTES     32U
 #endif /* BSP_XSPI_RAM_W958_ADDR_TEST_BYTES */
 
+#ifndef BSP_XSPI_RAM_W958_ADDR_TEST_STEP_DELAY_MS
+/*
+ * Extra debug delay inserted between sensitive read/write steps in ADDRTEST
+ * sequences (64WSEQ / SEQ_A / 64SPLIT). Set to 0U to disable.
+ */
+#define BSP_XSPI_RAM_W958_ADDR_TEST_STEP_DELAY_MS 0U
+#endif /* BSP_XSPI_RAM_W958_ADDR_TEST_STEP_DELAY_MS */
+
+#ifndef BSP_XSPI_RAM_W958_ADDR_TEST_SEQ_DEBUG_ENABLE
+/*
+ * 1: run extra sequence-debug tests (64WSEQ + SEQ_A) and their detailed logs.
+ * 0: skip those tests to reduce noise and avoid expected error spam.
+ */
+#define BSP_XSPI_RAM_W958_ADDR_TEST_SEQ_DEBUG_ENABLE 0U
+#endif /* BSP_XSPI_RAM_W958_ADDR_TEST_SEQ_DEBUG_ENABLE */
+
+#ifndef BSP_XSPI_RAM_W958_ADDR_TEST_64SPLIT_ENABLE
+/*
+ * 1: run [ADDRTEST][64SPLIT].
+ * 0: skip [ADDRTEST][64SPLIT] block (as requested during bring-up).
+ */
+#define BSP_XSPI_RAM_W958_ADDR_TEST_64SPLIT_ENABLE 0U
+#endif /* BSP_XSPI_RAM_W958_ADDR_TEST_64SPLIT_ENABLE */
+
 #ifndef BSP_XSPI_RAM_W958_TESTBUF_ADDR
 /*
  * Dedicated bring-up buffer address in known-good region (< 16MB).
@@ -236,7 +292,7 @@ extern "C" {
  * 1: if MMP is enabled, run YUV test directly on mapped window.
  * 0: force legacy path (switch MMP->INDIRECT then indirect write/read).
  */
-#define BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP    1U
+#define BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP    0U
 #endif /* BSP_XSPI_RAM_W958_YUV_TEST_USE_MMP */
 
 #ifndef BSP_XSPI_RAM_W958_YUV_XCHECK_ENABLE
@@ -254,6 +310,43 @@ extern "C" {
  */
 #define BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES    32U
 #endif /* BSP_XSPI_RAM_W958_YUV_XCHECK_BYTES */
+
+#ifndef BSP_XSPI_RAM_W958_YUV_MMP_CHUNK_BYTES
+/*
+ * If YUV test uses mapped mode, split long MMP accesses into fixed chunks.
+ */
+#define BSP_XSPI_RAM_W958_YUV_MMP_CHUNK_BYTES 32U
+#endif /* BSP_XSPI_RAM_W958_YUV_MMP_CHUNK_BYTES */
+
+#ifndef BSP_XSPI_RAM_W958_MMP_TEST_ENABLE
+/*
+ * Dedicated MMP qualification test switch.
+ * 1: enable API body/logs
+ * 0: keep API available but return BSP_ERROR_FEATURE_NOT_SUPPORTED
+ */
+#define BSP_XSPI_RAM_W958_MMP_TEST_ENABLE     1U
+#endif /* BSP_XSPI_RAM_W958_MMP_TEST_ENABLE */
+
+#ifndef BSP_XSPI_RAM_W958_MMP_TEST_XCHK_BYTES
+/*
+ * Small cross-check size for INDIRECT<->MMP handover checks.
+ */
+#define BSP_XSPI_RAM_W958_MMP_TEST_XCHK_BYTES 32U
+#endif /* BSP_XSPI_RAM_W958_MMP_TEST_XCHK_BYTES */
+
+#ifndef BSP_XSPI_RAM_W958_MMP_TEST_RANGE_BYTES
+/*
+ * Main MMP payload size for chunked mapped write/read verification.
+ */
+#define BSP_XSPI_RAM_W958_MMP_TEST_RANGE_BYTES BSP_XSPI_RAM_W958_TESTIMG_FRAME_BYTES
+#endif /* BSP_XSPI_RAM_W958_MMP_TEST_RANGE_BYTES */
+
+#ifndef BSP_XSPI_RAM_W958_MMP_TEST_CHUNK_BYTES
+/*
+ * Chunk size used by MMP range test loop.
+ */
+#define BSP_XSPI_RAM_W958_MMP_TEST_CHUNK_BYTES BSP_XSPI_RAM_W958_XFER_CHUNK_BYTES
+#endif /* BSP_XSPI_RAM_W958_MMP_TEST_CHUNK_BYTES */
 
 #ifndef BSP_XSPI_RAM_MMP_BASE
 #define BSP_XSPI_RAM_MMP_BASE                 XSPI1_BASE
@@ -660,6 +753,7 @@ int32_t BSP_XSPI_RAM_DisableMemoryMappedMode(uint32_t Instance);
 int32_t BSP_XSPI_RAM_ReadID(uint32_t Instance, uint8_t *Id);
 #if (BSP_XSPI_RAM_USE_W958D6NBKX == 1U)
 int32_t BSP_XSPI_RAM_W958_TestYuv422RgbBuffer(uint32_t Instance);
+int32_t BSP_XSPI_RAM_W958_TestMmpReadWrite(uint32_t Instance);
 #endif /* (BSP_XSPI_RAM_USE_W958D6NBKX == 1U) */
 /**
   * @}
