@@ -119,8 +119,8 @@ __WEAK HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *const hdma)
 #define APP_UVC_TEST_STATIC_JPEG_MODE 0
 /* Debug mode: inject prebuilt JPEG into venc_out_buffer and send it (skip runtime encode). */
 #define APP_UVC_TEST_INJECT_JPEG_TO_VENC_OUT 0
-/* Custom test encoder path: consume YUV from app_uvc_test_yuyv.h and generate JPEG for UVC. */
-#define APP_UVC_TEST_CUSTOM_ENCODER_MODE 1
+/* 0: use project encoder library path (ENC_EncodeFrame), 1: custom software JPEG path. */
+#define APP_UVC_TEST_CUSTOM_ENCODER_MODE 0
 /* In encoder-path test mode, use prebuilt YUYV frame from header as source. */
 #define APP_UVC_TEST_PREBUILT_YUYV_MODE 1
 #if APP_UVC_TEST_PATTERN_MODE && (APP_UVC_TEST_STATIC_JPEG_MODE || APP_UVC_TEST_INJECT_JPEG_TO_VENC_OUT)
@@ -5051,6 +5051,14 @@ void app_run()
 #if APP_UVC_TEST_PATTERN_MODE && APP_UVC_TEST_CUSTOM_ENCODER_MODE && !APP_UVC_TEST_VIEW_RAW_YUY2
 #if APP_UVC_TEST_BOOT_LOG_ENABLE
   printf("[ENC][SW] custom software JPEG encoder enabled: skip ENC_Init/ENC_EncodeFrame path\r\n");
+#endif
+#endif
+
+#if APP_UVC_TEST_PATTERN_MODE && !APP_UVC_TEST_VIEW_RAW_YUY2
+#if APP_UVC_TEST_CUSTOM_ENCODER_MODE
+  printf("==== UVC ENC PATH: CUSTOM SW JPEG (test mode) ====\r\n");
+#else
+  printf("==== UVC ENC PATH: PROJECT JPEG LIB (ENC_EncodeFrame) ====\r\n");
 #endif
 #endif
 
