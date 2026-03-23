@@ -82,6 +82,9 @@ static void UVCL_FillSentData(UVCL_Ctx_t *p_ctx, UVCL_OnFlyCtx_t *on_fly_ctx, ui
   }
   on_fly_ctx->p_frame = p_frame;
   on_fly_ctx->cursor = p_frame;
+  /* Reset per-frame packet state to guarantee deterministic EOF/FID sequencing. */
+  on_fly_ctx->packet_index = 0;
+  on_fly_ctx->prev_len = 0;
   /* Keep EOH=1, toggle FID at each new frame start and clear EOF. */
   p_ctx->packet[1] = (uint8_t)(UVC_PAYLOAD_BMH_EOH |
                                (((p_ctx->packet[1] ^ UVC_PAYLOAD_BMH_FID) & UVC_PAYLOAD_BMH_FID)));

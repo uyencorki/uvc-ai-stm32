@@ -31,6 +31,7 @@
 
 #define APP_ENC_INFO_LOG_ENABLE 0
 #define APP_ENC_ERROR_LOG_ENABLE 1
+#define APP_ENC_DEBUG_FRAME_LOG_ENABLE 1
 
 #if APP_ENC_INFO_LOG_ENABLE
 #define ENC_INFO_LOG(...) printf(__VA_ARGS__)
@@ -42,6 +43,12 @@
 #define ENC_ERR_LOG(...) printf(__VA_ARGS__)
 #else
 #define ENC_ERR_LOG(...) do {} while (0)
+#endif
+
+#if APP_ENC_DEBUG_FRAME_LOG_ENABLE
+#define ENC_DBG_LOG(...) printf(__VA_ARGS__)
+#else
+#define ENC_DBG_LOG(...) do {} while (0)
 #endif
 
 #define VENC_CACHE_OP(__op__) do { \
@@ -59,20 +66,106 @@ static int is_cache_enable(void)
 #endif
 }
 
-#define VENC_ALLOCATOR_SIZE (8 * 1024 * 1024)
+#define VENC_ALLOCATOR_BUDGET_SIZE (8U * 1024U * 1024U)
+#define VENC_LINEAR_ALIGN_BYTES 64U
+#define VENC_LINEAR_MAX_BLOCKS 64U
 /* 0 = strongest compression, 10 = highest quality (larger output). */
 #define JPEG_QUALITY_LEVEL 0
 
-static uint8_t venc_hw_allocator_buffer[VENC_ALLOCATOR_SIZE] ALIGN_32 IN_PSRAM;
-static uint8_t *venc_hw_allocator_pos = venc_hw_allocator_buffer;
+typedef struct
+{
+  void *raw_ptr;
+  uint32_t alloc_size;
+} VENC_LinearBlock_t;
+
+static VENC_LinearBlock_t venc_linear_blocks[VENC_LINEAR_MAX_BLOCKS];
+static uint32_t venc_linear_block_count;
+static uint32_t venc_linear_alloc_bytes;
 static int venc_init_failed_logged;
 static uint32_t venc_linear_alloc_count;
 static uint32_t venc_encode_ok_count;
 static uint32_t venc_encode_fail_count;
 static uint32_t venc_encode_last_log_ms;
 static uint32_t venc_copy_out_log_ms;
+static uint32_t venc_debug_frame_id;
 /* JFIF headers are CPU-written; entropy payload is HW-written. */
 #define VENC_CPU_HEADER_FLUSH_BYTES_MAX 1024U
+
+static void VENC_LinearAllocatorReset(void)
+{
+  uint32_t i;
+
+  for (i = 0U; i < venc_linear_block_count; i++)
+  {
+    if (venc_linear_blocks[i].raw_ptr != NULL)
+    {
+      free(venc_linear_blocks[i].raw_ptr);
+      venc_linear_blocks[i].raw_ptr = NULL;
+      venc_linear_blocks[i].alloc_size = 0U;
+    }
+  }
+
+  venc_linear_block_count = 0U;
+  venc_linear_alloc_bytes = 0U;
+}
+
+static int VENC_LinearAllocatorAdd(void *raw_ptr, uint32_t alloc_size)
+{
+  if ((raw_ptr == NULL) || (alloc_size == 0U))
+  {
+    return -1;
+  }
+
+  if (venc_linear_block_count >= VENC_LINEAR_MAX_BLOCKS)
+  {
+    return -1;
+  }
+
+  if ((venc_linear_alloc_bytes + alloc_size) > VENC_ALLOCATOR_BUDGET_SIZE)
+  {
+    return -1;
+  }
+
+  venc_linear_blocks[venc_linear_block_count].raw_ptr = raw_ptr;
+  venc_linear_blocks[venc_linear_block_count].alloc_size = alloc_size;
+  venc_linear_block_count++;
+  venc_linear_alloc_bytes += alloc_size;
+  return 0;
+}
+
+static void VENC_LinearAllocatorRemove(void *raw_ptr)
+{
+  uint32_t i;
+
+  if (raw_ptr == NULL)
+  {
+    return;
+  }
+
+  for (i = 0U; i < venc_linear_block_count; i++)
+  {
+    if (venc_linear_blocks[i].raw_ptr == raw_ptr)
+    {
+      if (venc_linear_alloc_bytes >= venc_linear_blocks[i].alloc_size)
+      {
+        venc_linear_alloc_bytes -= venc_linear_blocks[i].alloc_size;
+      }
+      else
+      {
+        venc_linear_alloc_bytes = 0U;
+      }
+
+      if ((i + 1U) < venc_linear_block_count)
+      {
+        venc_linear_blocks[i] = venc_linear_blocks[venc_linear_block_count - 1U];
+      }
+      venc_linear_blocks[venc_linear_block_count - 1U].raw_ptr = NULL;
+      venc_linear_blocks[venc_linear_block_count - 1U].alloc_size = 0U;
+      venc_linear_block_count--;
+      return;
+    }
+  }
+}
 
 struct VENC_Context {
   JpegEncInst hdl;
@@ -206,7 +299,7 @@ void ENC_Init(ENC_Conf_t *p_conf)
   uint32_t t0_ms;
   int ret;
 
-  venc_hw_allocator_pos = venc_hw_allocator_buffer;
+  VENC_LinearAllocatorReset();
   venc_linear_alloc_count = 0;
   venc_init_failed_logged = 0;
   venc_encode_ok_count = 0U;
@@ -253,9 +346,14 @@ void ENC_Init(ENC_Conf_t *p_conf)
               (unsigned long)p_ctx->cfg.inputHeight,
               (int)p_ctx->cfg.qLevel);
 
-  ENC_INFO_LOG("[ENC] init begin cfg=%dx%d@%d input=%s q=%d alloc=%u\r\n",
+  ENC_INFO_LOG("[ENC] init begin cfg=%dx%d@%d input=%s q=%d alloc=heap_no_psram budget=%u blocks=%u\r\n",
                p_conf->width, p_conf->height, p_conf->fps, input_name,
-               JPEG_QUALITY_LEVEL, (unsigned int)VENC_ALLOCATOR_SIZE);
+               JPEG_QUALITY_LEVEL,
+               (unsigned int)VENC_ALLOCATOR_BUDGET_SIZE,
+               (unsigned int)VENC_LINEAR_MAX_BLOCKS);
+  ENC_ERR_LOG("==== ENC allocator: HEAP/AXI (NO_PSRAM) budget=%u max_blocks=%u ====\r\n",
+              (unsigned int)VENC_ALLOCATOR_BUDGET_SIZE,
+              (unsigned int)VENC_LINEAR_MAX_BLOCKS);
   t0_ms = HAL_GetTick();
   ENC_INFO_LOG("[ENC] call JpegEncInit cfg_ptr=0x%08lX\r\n", (unsigned long)&p_ctx->cfg);
   ret = JpegEncInit(&p_ctx->cfg, &p_ctx->hdl);
@@ -302,6 +400,7 @@ void ENC_DeInit(void)
   ret = JpegEncRelease(p_ctx->hdl);
   assert(ret == JPEGENC_OK);
   p_ctx->hdl = NULL;
+  VENC_LinearAllocatorReset();
 }
 
 int ENC_EncodeFrame(uint8_t *p_in, uint8_t *p_out, size_t out_len, int is_intra_force)
@@ -313,8 +412,13 @@ int ENC_EncodeFrame(uint8_t *p_in, uint8_t *p_out, size_t out_len, int is_intra_
   uint32_t now_ms;
   size_t in_frame_bytes;
   size_t header_flush_bytes;
+  uint8_t h0 = 0U, h1 = 0U, h2 = 0U, h3 = 0U;
+  uint8_t t0 = 0U, t1 = 0U, t2 = 0U, t3 = 0U;
+  int has_soi = 0;
+  int has_eoi = 0;
 
   (void)is_intra_force;
+  venc_debug_frame_id++;
 
   if (p_ctx->hdl == NULL)
   {
@@ -370,6 +474,14 @@ int ENC_EncodeFrame(uint8_t *p_in, uint8_t *p_out, size_t out_len, int is_intra_
                    (unsigned long)enc_in.outBufSize);
       venc_encode_last_log_ms = now_ms;
     }
+    ENC_DBG_LOG("[ENC][DBG][RET] id=%lu ret=%d(%s) jfif=%lu out=%lu in_ptr=0x%08lX out_ptr=0x%08lX\r\n",
+                (unsigned long)venc_debug_frame_id,
+                ret,
+                VENC_RetStr(ret),
+                (unsigned long)enc_out.jfifSize,
+                (unsigned long)enc_in.outBufSize,
+                (unsigned long)enc_in.pLum,
+                (unsigned long)enc_in.pOutBuf);
     return -1;
   }
 
@@ -412,6 +524,30 @@ int ENC_EncodeFrame(uint8_t *p_in, uint8_t *p_out, size_t out_len, int is_intra_
   __DSB();
   __ISB();
 
+  if (enc_out.jfifSize >= 4U)
+  {
+    h0 = p_out[0];
+    h1 = p_out[1];
+    h2 = p_out[2];
+    h3 = p_out[3];
+    t0 = p_out[enc_out.jfifSize - 4U];
+    t1 = p_out[enc_out.jfifSize - 3U];
+    t2 = p_out[enc_out.jfifSize - 2U];
+    t3 = p_out[enc_out.jfifSize - 1U];
+    has_soi = ((h0 == 0xFFU) && (h1 == 0xD8U)) ? 1 : 0;
+    has_eoi = ((t2 == 0xFFU) && (t3 == 0xD9U)) ? 1 : 0;
+  }
+
+  ENC_DBG_LOG("[ENC][DBG][OUT] id=%lu jfif=%lu soi=%d eoi=%d in_ptr=0x%08lX out_ptr=0x%08lX head=%02X %02X %02X %02X tail=%02X %02X %02X %02X\r\n",
+              (unsigned long)venc_debug_frame_id,
+              (unsigned long)enc_out.jfifSize,
+              has_soi,
+              has_eoi,
+              (unsigned long)enc_in.pLum,
+              (unsigned long)enc_in.pOutBuf,
+              h0, h1, h2, h3,
+              t0, t1, t2, t3);
+
   if ((now_ms - venc_copy_out_log_ms) >= 1000U)
   {
     ENC_INFO_LOG("[ENC][OUT] out_va=0x%08lX out_bus=0x%08lX jfif=%lu out=%lu storage=AXI(no-PSRAM)\r\n",
@@ -453,15 +589,14 @@ void *EWLcalloc(u32 n, u32 s)
   return res;
 }
 
-/* Implement simple EWLMallocLinear. No dealloc supported */
+/* Implement EWLMallocLinear via heap-backed aligned blocks (no PSRAM static pool). */
 i32 EWLMallocLinear(const void *instance, u32 size, EWLLinearMem_t *info)
 {
-  uintptr_t pos = (uintptr_t)venc_hw_allocator_pos;
-  uintptr_t base = (uintptr_t)venc_hw_allocator_buffer;
-  uintptr_t end = base + (uintptr_t)VENC_ALLOCATOR_SIZE;
+  void *raw_ptr;
+  uintptr_t raw_addr;
   uintptr_t alloc_addr;
-  uintptr_t next_pos;
   uint32_t alloc_size;
+  size_t raw_size;
 
   (void)instance;
   if (info == NULL)
@@ -469,36 +604,92 @@ i32 EWLMallocLinear(const void *instance, u32 size, EWLLinearMem_t *info)
     return -1;
   }
 
-  alloc_addr = (pos + 63U) & ~((uintptr_t)63U);
-  alloc_size = (uint32_t)((size + 63U) & ~((u32)63U));
-  next_pos = alloc_addr + (uintptr_t)alloc_size;
+  alloc_size = (uint32_t)((size + (VENC_LINEAR_ALIGN_BYTES - 1U)) & ~((u32)(VENC_LINEAR_ALIGN_BYTES - 1U)));
   venc_linear_alloc_count++;
+  ENC_INFO_LOG("[ENC][ALLOC] #%lu req=%lu align=%lu used=%lu/%u blocks=%lu/%u\r\n",
+               (unsigned long)venc_linear_alloc_count,
+               (unsigned long)size,
+               (unsigned long)alloc_size,
+               (unsigned long)venc_linear_alloc_bytes,
+               (unsigned int)VENC_ALLOCATOR_BUDGET_SIZE,
+               (unsigned long)venc_linear_block_count,
+               (unsigned int)VENC_LINEAR_MAX_BLOCKS);
+  if ((venc_linear_block_count >= VENC_LINEAR_MAX_BLOCKS) ||
+      ((venc_linear_alloc_bytes + alloc_size) > VENC_ALLOCATOR_BUDGET_SIZE))
+  {
+    ENC_ERR_LOG("[ENC][ERR] EWLMallocLinear budget/block exceeded req=%lu aligned=%lu used=%lu/%u blocks=%lu/%u\r\n",
+                (unsigned long)size,
+                (unsigned long)alloc_size,
+                (unsigned long)venc_linear_alloc_bytes,
+                (unsigned int)VENC_ALLOCATOR_BUDGET_SIZE,
+                (unsigned long)venc_linear_block_count,
+                (unsigned int)VENC_LINEAR_MAX_BLOCKS);
+    return -1;
+  }
+
+  raw_size = (size_t)alloc_size + (size_t)VENC_LINEAR_ALIGN_BYTES + sizeof(void *);
+  raw_ptr = malloc(raw_size);
+  if (raw_ptr == NULL)
+  {
+    ENC_ERR_LOG("[ENC][ERR] EWLMallocLinear malloc failed req=%lu aligned=%lu raw_size=%lu\r\n",
+                (unsigned long)size,
+                (unsigned long)alloc_size,
+                (unsigned long)raw_size);
+    return -1;
+  }
+
+  raw_addr = (uintptr_t)raw_ptr;
+  alloc_addr = (raw_addr + sizeof(void *) + (uintptr_t)(VENC_LINEAR_ALIGN_BYTES - 1U)) &
+               ~((uintptr_t)(VENC_LINEAR_ALIGN_BYTES - 1U));
+  ((void **)alloc_addr)[-1] = raw_ptr;
+  if (VENC_LinearAllocatorAdd(raw_ptr, alloc_size) != 0)
+  {
+    free(raw_ptr);
+    ENC_ERR_LOG("[ENC][ERR] EWLMallocLinear allocator add failed req=%lu aligned=%lu\r\n",
+                (unsigned long)size,
+                (unsigned long)alloc_size);
+    return -1;
+  }
+
+  memset((void *)alloc_addr, 0, alloc_size);
   ENC_INFO_LOG("[ENC][ALLOC] #%lu req=%lu align=%lu used=%lu/%u\r\n",
                (unsigned long)venc_linear_alloc_count,
                (unsigned long)size,
                (unsigned long)alloc_size,
-               (unsigned long)(pos - base),
-               (unsigned int)VENC_ALLOCATOR_SIZE);
-  if (next_pos > end)
-  {
-    ENC_ERR_LOG("[ENC][ERR] EWLMallocLinear OOM req=%lu aligned=%lu used=%lu cap=%u\r\n",
-                (unsigned long)size,
-                (unsigned long)alloc_size,
-                (unsigned long)(pos - base),
-                (unsigned int)VENC_ALLOCATOR_SIZE);
-    return -1;
-  }
+               (unsigned long)venc_linear_alloc_bytes,
+               (unsigned int)VENC_ALLOCATOR_BUDGET_SIZE);
 
   info->size = size;
   info->virtualAddress = (u32 *)alloc_addr;
   info->busAddress = (ptr_t)info->virtualAddress;
-  venc_hw_allocator_pos = (uint8_t *)next_pos;
   ENC_INFO_LOG("[ENC][ALLOC] #%lu ok va=0x%08lX bus=0x%08lX next_used=%lu/%u\r\n",
                (unsigned long)venc_linear_alloc_count,
                (unsigned long)info->virtualAddress,
                (unsigned long)info->busAddress,
-               (unsigned long)(next_pos - base),
-               (unsigned int)VENC_ALLOCATOR_SIZE);
+               (unsigned long)venc_linear_alloc_bytes,
+               (unsigned int)VENC_ALLOCATOR_BUDGET_SIZE);
 
   return 0;
+}
+
+void EWLFreeLinear(const void *instance, EWLLinearMem_t *info)
+{
+  void *raw_ptr;
+
+  (void)instance;
+  if ((info == NULL) || (info->virtualAddress == NULL))
+  {
+    return;
+  }
+
+  raw_ptr = ((void **)info->virtualAddress)[-1];
+  if (raw_ptr != NULL)
+  {
+    VENC_LinearAllocatorRemove(raw_ptr);
+    free(raw_ptr);
+  }
+
+  info->virtualAddress = NULL;
+  info->busAddress = (ptr_t)0;
+  info->size = 0U;
 }

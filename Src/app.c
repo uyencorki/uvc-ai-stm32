@@ -142,6 +142,8 @@ __WEAK HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *const hdma)
 #define APP_ENC_RUNTIME_VALIDATE 1
 #define APP_ENC_VALIDATE_LOG_PERIOD_MS 1000U
 #define APP_ENC_FORCE_SEND_AFTER_ENCODE 1
+#define APP_ENC_DEBUG_FRAME_LOG_ENABLE 1
+#define APP_ENC_DEBUG_LOG_EVERY_N 1U
 #define APP_UVC_TEST_FORCE_DEDICATED_SRC 1
 #define APP_UVC_TEST_SMALL_FRAME_ENABLE 1
 #define APP_UVC_TEST_SMALL_WIDTH 960
@@ -547,6 +549,7 @@ static uint32_t g_enc_runtime_valid_count;
 static uint32_t g_enc_runtime_invalid_count;
 static uint32_t g_enc_runtime_copy_mismatch_count;
 static uint32_t g_enc_runtime_last_log_ms;
+static uint32_t g_enc_debug_frame_id;
 static uint32_t g_uvc_src_last_log_ms;
 static uint32_t g_psram_src_guard_last_ms;
 static uint32_t g_psram_src_guard_ok_count;
@@ -3891,6 +3894,11 @@ static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
   uint32_t ts_ms;
   uint32_t sum_src;
   uint32_t sum_dst;
+  uint8_t src_h0 = 0U, src_h1 = 0U, src_h2 = 0U, src_h3 = 0U;
+  uint8_t src_t0 = 0U, src_t1 = 0U, src_t2 = 0U, src_t3 = 0U;
+  uint8_t dst_h0 = 0U, dst_h1 = 0U, dst_h2 = 0U, dst_h3 = 0U;
+  uint8_t dst_t0 = 0U, dst_t1 = 0U, dst_t2 = 0U, dst_t3 = 0U;
+  int dbg_log_now;
 #if APP_ENC_OUT_SENTINEL_DEBUG
   uint8_t out_head_before[4] = {0xA5U, 0xA5U, 0xA5U, 0xA5U};
   int head_unchanged;
@@ -3979,10 +3987,42 @@ static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
 #endif
   app_log_encoded_data_1s(venc_out_buffer, enc_ret);
   sum_src = app_sum_prefix_u32(venc_out_buffer, enc_ret, APP_ENC_DUMP_SUM_BYTES);
+  g_enc_debug_frame_id++;
+  dbg_log_now = ((APP_ENC_DEBUG_LOG_EVERY_N > 0U) && ((g_enc_debug_frame_id % APP_ENC_DEBUG_LOG_EVERY_N) == 0U)) ? 1 : 0;
+  if (enc_ret >= 4)
+  {
+    src_h0 = venc_out_buffer[0];
+    src_h1 = venc_out_buffer[1];
+    src_h2 = venc_out_buffer[2];
+    src_h3 = venc_out_buffer[3];
+    src_t0 = venc_out_buffer[enc_ret - 4];
+    src_t1 = venc_out_buffer[enc_ret - 3];
+    src_t2 = venc_out_buffer[enc_ret - 2];
+    src_t3 = venc_out_buffer[enc_ret - 1];
+  }
 
 #if APP_ENC_RUNTIME_VALIDATE
   app_jpeg_parse_meta(venc_out_buffer, enc_ret, &src_meta);
   src_valid = app_jpeg_is_valid(&src_meta);
+#if APP_ENC_DEBUG_FRAME_LOG_ENABLE
+  if (dbg_log_now)
+  {
+    printf("[ENC][DBG][SRC] id=%lu ptr=0x%08lX len=%d soi=%d sof=%d wh=%dx%d sos=%d eoi=%d sum%u=%lu head=%02X %02X %02X %02X tail=%02X %02X %02X %02X\r\n",
+           (unsigned long)g_enc_debug_frame_id,
+           (unsigned long)venc_out_buffer,
+           enc_ret,
+           src_meta.has_soi,
+           src_meta.sof_off,
+           src_meta.sof_w,
+           src_meta.sof_h,
+           src_meta.sos_off,
+           src_meta.has_eoi,
+           APP_ENC_DUMP_SUM_BYTES,
+           (unsigned long)sum_src,
+           src_h0, src_h1, src_h2, src_h3,
+           src_t0, src_t1, src_t2, src_t3);
+  }
+#endif
   if (!src_valid ||
       (src_meta.sof_w != APP_UVC_ENC_WIDTH) ||
       (src_meta.sof_h != APP_UVC_ENC_HEIGHT))
@@ -4009,6 +4049,16 @@ static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
              APP_ENC_FORCE_SEND_AFTER_ENCODE);
       g_enc_runtime_last_log_ms = now_ms;
     }
+#if APP_ENC_DEBUG_FRAME_LOG_ENABLE
+    printf("[ENC][DBG][SRC][BAD] id=%lu ptr=0x%08lX len=%d sum%u=%lu head=%02X %02X %02X %02X tail=%02X %02X %02X %02X\r\n",
+           (unsigned long)g_enc_debug_frame_id,
+           (unsigned long)venc_out_buffer,
+           enc_ret,
+           APP_ENC_DUMP_SUM_BYTES,
+           (unsigned long)sum_src,
+           src_h0, src_h1, src_h2, src_h3,
+           src_t0, src_t1, src_t2, src_t3);
+#endif
 #if !APP_ENC_FORCE_SEND_AFTER_ENCODE
     return (size_t)-1;
 #endif
@@ -4017,11 +4067,41 @@ static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
 
   memcpy(uvc_in_buffers, venc_out_buffer, res);
   sum_dst = app_sum_prefix_u32(uvc_in_buffers, enc_ret, APP_ENC_DUMP_SUM_BYTES);
+  if (enc_ret >= 4)
+  {
+    dst_h0 = uvc_in_buffers[0];
+    dst_h1 = uvc_in_buffers[1];
+    dst_h2 = uvc_in_buffers[2];
+    dst_h3 = uvc_in_buffers[3];
+    dst_t0 = uvc_in_buffers[enc_ret - 4];
+    dst_t1 = uvc_in_buffers[enc_ret - 3];
+    dst_t2 = uvc_in_buffers[enc_ret - 2];
+    dst_t3 = uvc_in_buffers[enc_ret - 1];
+  }
   audit_jpeg_bs = uvc_in_buffers;
 
 #if APP_ENC_RUNTIME_VALIDATE
   app_jpeg_parse_meta(uvc_in_buffers, enc_ret, &dst_meta);
   dst_valid = app_jpeg_is_valid(&dst_meta);
+#if APP_ENC_DEBUG_FRAME_LOG_ENABLE
+  if (dbg_log_now)
+  {
+    printf("[ENC][DBG][DST] id=%lu ptr=0x%08lX len=%d soi=%d sof=%d wh=%dx%d sos=%d eoi=%d sum%u=%lu head=%02X %02X %02X %02X tail=%02X %02X %02X %02X\r\n",
+           (unsigned long)g_enc_debug_frame_id,
+           (unsigned long)uvc_in_buffers,
+           enc_ret,
+           dst_meta.has_soi,
+           dst_meta.sof_off,
+           dst_meta.sof_w,
+           dst_meta.sof_h,
+           dst_meta.sos_off,
+           dst_meta.has_eoi,
+           APP_ENC_DUMP_SUM_BYTES,
+           (unsigned long)sum_dst,
+           dst_h0, dst_h1, dst_h2, dst_h3,
+           dst_t0, dst_t1, dst_t2, dst_t3);
+  }
+#endif
   if (!dst_valid ||
       (sum_src != sum_dst) ||
       (src_meta.sof_w != dst_meta.sof_w) ||
@@ -4046,6 +4126,17 @@ static size_t encode_display(int is_intra_force, uint8_t *p_buffer)
              APP_ENC_FORCE_SEND_AFTER_ENCODE);
       g_enc_runtime_last_log_ms = now_ms;
     }
+#if APP_ENC_DEBUG_FRAME_LOG_ENABLE
+    printf("[ENC][DBG][DST][BAD] id=%lu src_ptr=0x%08lX dst_ptr=0x%08lX len=%d sum=%lu/%lu src_tail=%02X %02X %02X %02X dst_tail=%02X %02X %02X %02X\r\n",
+           (unsigned long)g_enc_debug_frame_id,
+           (unsigned long)venc_out_buffer,
+           (unsigned long)uvc_in_buffers,
+           enc_ret,
+           (unsigned long)sum_src,
+           (unsigned long)sum_dst,
+           src_t0, src_t1, src_t2, src_t3,
+           dst_t0, dst_t1, dst_t2, dst_t3);
+#endif
 #if !APP_ENC_FORCE_SEND_AFTER_ENCODE
     return (size_t)-1;
 #endif
@@ -4716,6 +4807,7 @@ static void app_uvc_streaming_active(struct uvcl_callbacks *cbs, UVCL_StreamConf
   g_uvc_last_enc_ms = 0U;
   g_uvc_last_send_ms = 0U;
   g_uvc_last_pipe1_seq = g_pipe1_completed_seq;
+  g_enc_debug_frame_id = 0U;
   g_pipe_error_start_recover_count = 0U;
 #if APP_UVC_TEST_PATTERN_MODE
   g_uvc_test_pattern_seq = 0U;
