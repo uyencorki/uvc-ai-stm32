@@ -21,6 +21,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef APP_ENC_USE_H264
+#define APP_ENC_USE_H264 0
+#endif
+
 typedef enum {
   ENC_INPUT_RGB888 = 0,
   ENC_INPUT_YUV422_YUYV,

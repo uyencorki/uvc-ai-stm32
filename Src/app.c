@@ -136,10 +136,11 @@ __WEAK HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *const hdma)
 #else
 #define APP_ENC_DUMP_ENABLE 0
 #endif
+#define APP_UVC_ENC_USE_H264 APP_ENC_USE_H264
 #define APP_ENC_DUMP_PERIOD_MS 1000U
 #define APP_ENC_DUMP_BYTES 16
 #define APP_ENC_DUMP_SUM_BYTES 64
-#define APP_ENC_RUNTIME_VALIDATE 1
+#define APP_ENC_RUNTIME_VALIDATE ((APP_UVC_ENC_USE_H264) ? 0 : 1)
 #define APP_ENC_VALIDATE_LOG_PERIOD_MS 1000U
 #define APP_ENC_FORCE_SEND_AFTER_ENCODE 1
 #define APP_ENC_DEBUG_FRAME_LOG_ENABLE 1
@@ -5150,7 +5151,11 @@ void app_run()
 #if APP_UVC_TEST_CUSTOM_ENCODER_MODE
   printf("==== UVC ENC PATH: CUSTOM SW JPEG (test mode) ====\r\n");
 #else
+#if APP_UVC_ENC_USE_H264
+  printf("==== UVC ENC PATH: PROJECT H264 LIB (ENC_EncodeFrame) ====\r\n");
+#else
   printf("==== UVC ENC PATH: PROJECT JPEG LIB (ENC_EncodeFrame) ====\r\n");
+#endif
 #endif
 #endif
 
@@ -5166,7 +5171,11 @@ void app_run()
   uvcl_conf.streams[0].payload_type = UVCL_PAYLOAD_UNCOMPRESSED_YUY2;
   uvcl_conf.streams[0].dwMaxVideoFrameSize = APP_UVC_ENC_FRAME_BYTES;
 #else
+#if APP_UVC_ENC_USE_H264
+  uvcl_conf.streams[0].payload_type = UVCL_PAYLOAD_FB_H264;
+#else
   uvcl_conf.streams[0].payload_type = UVCL_PAYLOAD_JPEG;
+#endif
   uvcl_conf.streams[0].dwMaxVideoFrameSize = VENC_OUT_BUFFER_SIZE;
 #endif
   uvcl_conf.streams_nb = 1;
